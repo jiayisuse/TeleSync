@@ -5,6 +5,8 @@
 
 #include <start.h>
 #include <debug.h>
+#include <file_table.h>
+#include <trans_file_table.h>
 
 int debug = 0;
 
