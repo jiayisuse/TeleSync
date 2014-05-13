@@ -1,10 +1,13 @@
 #ifndef TRANS_FILE_TABLE_H
 #define TRANS_FILE_TABLE_H
 
+#include <stdint.h>
+
 #include "consts.h"
 #include "file_table.h"
 
-#define trans_table_len(table) ((table)->n * sizeof(struct trans_file_entry))
+#define trans_table_len(table) (sizeof(int) +	\
+		(table)->n * sizeof(struct trans_file_entry))
 
 enum operation_type {
 	ADD,
@@ -13,8 +16,8 @@ enum operation_type {
 };
 
 struct peer_id {
-	char ip[IP_LEN];
-	char port[PORT_LEN];
+	uint32_t ip;
+	uint16_t port;
 };
 
 struct trans_file_entry {

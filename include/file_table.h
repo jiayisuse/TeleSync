@@ -1,12 +1,13 @@
 #ifndef FILE_TABLE_H
 #define FILE_TABLE_H
 
+#include <stdint.h>
 #include <pthread.h>
 #include "consts.h"
 
 struct peer_id_list {
-	char ip[IP_LEN];
-	char port[PORT_LEN];
+	uint32_t ip;
+	uint16_t port;
 	struct peer_id_list *next;
 };
 
