@@ -10,9 +10,9 @@
 		(table)->n * sizeof(struct trans_file_entry))
 
 enum operation_type {
-	ADD,
-	DELETE,
-	UPDATE
+	FILE_ADD,
+	FILE_DELETE,
+	FILE_MODIFY
 };
 
 struct peer_id {
@@ -21,10 +21,11 @@ struct peer_id {
 };
 
 struct trans_file_entry {
-	char name[MAX_LINE];
-	int op_type;
-	long int timestamp;
-	int owner_n;
+	char name[MAX_NAME_LEN];
+	uint64_t timestamp;
+	uint16_t op_type;
+	uint16_t file_type;
+	uint16_t owner_n;
 	struct peer_id owners[MAX_PEER_ENTRIES];
 };
 
@@ -33,7 +34,7 @@ struct trans_file_table {
 	struct trans_file_entry entries[MAX_FILE_ENTRIES];
 };
 
-inline struct trans_file_entry *convert_from_file_entry(struct file_entry *entry)
+static inline struct trans_file_entry *convert_from_file_entry(struct file_entry *entry)
 {
 	return NULL;
 }

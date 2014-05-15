@@ -5,6 +5,7 @@
 
 #include <start.h>
 #include <debug.h>
+#include <packet_def.h>
 #include <file_table.h>
 #include <trans_file_table.h>
 
