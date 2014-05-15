@@ -5,6 +5,12 @@
 #include <pthread.h>
 #include "consts.h"
 
+enum file_type {
+	REGULAR,
+	DIRECTORY,
+	SOFT_LINK,
+};
+
 struct peer_id_list {
 	uint32_t ip;
 	uint16_t port;
@@ -14,7 +20,8 @@ struct peer_id_list {
 struct file_entry {
 	struct file_entry *next;
 	char *name;
-	long int timestamp;
+	uint64_t timestamp;
+	enum file_type type;
 	struct peer_id_list *owners_head;
 };
 
