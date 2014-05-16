@@ -14,11 +14,9 @@ extern int debug;
 
 #define _error(FMT, ...)						\
 	do {								\
-		fprintf(stderr, "******************************\n");	\
 		fprintf(stderr, "ERROR at line %d of %s() in \"%s\":  " \
 				FMT,__LINE__, __func__, __FILE__,	\
 							##__VA_ARGS__);	\
-		fprintf(stderr, "******************************\n");	\
 	} while (0)
 
 #define _enter(FMT, ...) _debug(">>>>>  %s(): "FMT"\n", __func__, ##__VA_ARGS__)

@@ -4,9 +4,10 @@
 #include <stdio.h>
 
 /* Simple linked list inspired from the Linux kernel list implementation */
-typedef struct list_head {
-	struct list_head *prev, *next;
-} list_t;
+struct list_head {
+	struct list_head *prev;
+        struct list_head *next;
+};
 
 #define LIST_NULL -1
 #define LIST_SUCCESS 1
@@ -29,10 +30,10 @@ typedef struct list_head {
 		(type *)( (char *)__mptr - offsetof(type,member) );})
 #define offsetof(TYPE, MEMBER) ((unsigned long) &((TYPE *)0)->MEMBER)
 
-int list_del(list_t * le);
-int list_del_init(list_t * le);
-int list_add_tail(list_t * head, list_t * le);
-int list_add(list_t * head, list_t * le);
+int list_del(struct list_head *le);
+int list_del_init(struct list_head *le);
+int list_add_tail(struct list_head *head, struct list_head *le);
+int list_add(struct list_head *head, struct list_head *le);
 
 #define list_for_each(curr, head) \
 	for (curr = (head)->next; curr != (head); curr = curr->next)

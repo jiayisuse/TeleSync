@@ -2,11 +2,32 @@
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <stdint.h>
 #include <sys/socket.h>
 
 #include <debug.h>
 #include <utility/segment.h>
 #include "packet.h"
+
+extern uint32_t my_ip;
+
+void ptot_packet_init(struct ptot_packet *pkt, enum ptot_packet_type type)
+{
+	if (pkt == NULL)
+		return;
+	bzero(pkt, sizeof(struct ptot_packet));
+	pkt->hdr.type = type;
+	pkt->hdr.ip = my_ip;
+	pkt->hdr.port = PEER_TRACKER_PORT;
+}
+
+inline void ptot_packet_fill(struct ptot_packet *pkt, void *buf, int len)
+{
+	if (pkt == NULL)
+		return;
+	memcpy(pkt->data, buf, len);
+	pkt->hdr.data_len = len;
+}
 
 /**
  * peer sends a ptot packet to tracker

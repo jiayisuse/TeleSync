@@ -1,6 +1,6 @@
 #include <utility/list.h>
 
-static inline int listelm_detach(list_t * prev, list_t * next)
+static inline int listelm_detach(struct list_head * prev, struct list_head * next)
 {
 	next->prev = prev;
 	prev->next = next;
@@ -8,7 +8,7 @@ static inline int listelm_detach(list_t * prev, list_t * next)
 	return LIST_SUCCESS;
 }
 
-static inline int listelm_add(list_t * le, list_t * prev, list_t * next)
+static inline int listelm_add(struct list_head * le, struct list_head * prev, struct list_head * next)
 {
 	prev->next = le;
 	le->prev = prev;
@@ -18,7 +18,7 @@ static inline int listelm_add(list_t * le, list_t * prev, list_t * next)
 	return LIST_SUCCESS;
 }
 
-int list_add(list_t *head, list_t *le)
+int list_add(struct list_head *head, struct list_head *le)
 {
 
 	if (!head || !le)
@@ -29,7 +29,7 @@ int list_add(list_t *head, list_t *le)
 	return LIST_SUCCESS;
 }
 
-int list_add_tail(list_t *head, list_t *le)
+int list_add_tail(struct list_head *head, struct list_head *le)
 {
 
 	if (!head || !le)
@@ -40,7 +40,7 @@ int list_add_tail(list_t *head, list_t *le)
 	return LIST_SUCCESS;
 }
 
-int list_del(list_t *le)
+int list_del(struct list_head *le)
 {
 	if (!le)
 		return LIST_NULL;
@@ -55,7 +55,7 @@ int list_del(list_t *le)
 	return LIST_SUCCESS;
 }
 
-int list_del_init(list_t *le)
+int list_del_init(struct list_head *le)
 {
 	int ret;
 

@@ -10,6 +10,7 @@
 		(table)->n * sizeof(struct trans_file_entry))
 
 enum operation_type {
+	FILE_NONE,
 	FILE_ADD,
 	FILE_DELETE,
 	FILE_MODIFY
