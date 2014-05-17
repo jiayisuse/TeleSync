@@ -1,4 +1,4 @@
-#include <utility/list.h>
+#include <list.h>
 
 static inline int listelm_detach(struct list_head * prev, struct list_head * next)
 {

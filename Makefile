@@ -1,6 +1,6 @@
 target = dartsync
 common_headers = include/*.h
-server_objs = server/start.o server/packet.o
+server_objs = server/start.o server/packet.o server/file_table.o
 client_objs = client/start.o client/file_monitor.o client/packet.o
 utility_objs = utility/segment.o utility/list.o utility/pthread_wait.o
 objects = dartsync.o $(server_objs) $(client_objs) $(utility_objs)
@@ -16,4 +16,4 @@ $(target) : $(objects)
 	$(CC) -c -o $@ $< $(INC) $(CFLAGS)
 
 clean:
-	rm *.o $(target) $(server_objs) $(client_objs) $(utility_objs)
+	rm $(target) $(objects)

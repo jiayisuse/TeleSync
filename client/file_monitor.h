@@ -1,7 +1,7 @@
 #ifndef FILE_MONITOR_H
 #define FILE_MONITOR_H
 
-#include <utility/list.h>
+#include <list.h>
 
 #define INOTIRY_WATCH_MASK	(IN_CREATE | IN_DELETE | IN_DELETE_SELF |	\
 				 IN_MODIFY | IN_MOVE_SELF |			\

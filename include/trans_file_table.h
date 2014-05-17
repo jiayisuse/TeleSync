@@ -3,11 +3,16 @@
 
 #include <stdint.h>
 
-#include "consts.h"
-#include "file_table.h"
+#include <consts.h>
 
 #define trans_table_len(table) (sizeof(int) +	\
 		(table)->n * sizeof(struct trans_file_entry))
+
+enum file_type {
+	REGULAR,
+	DIRECTORY,
+	SOFT_LINK,
+};
 
 enum operation_type {
 	FILE_NONE,
@@ -34,10 +39,5 @@ struct trans_file_table {
 	int n;
 	struct trans_file_entry entries[MAX_FILE_ENTRIES];
 };
-
-static inline struct trans_file_entry *convert_from_file_entry(struct file_entry *entry)
-{
-	return NULL;
-}
 
 #endif

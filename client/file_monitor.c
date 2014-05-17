@@ -12,14 +12,11 @@
 
 #include <debug.h>
 #include <consts.h>
-#include <file_table.h>
 #include <trans_file_table.h>
-#include <utility/list.h>
+#include <list.h>
 #include "start.h"
 #include "packet.h"
 #include "file_monitor.h"
-
-extern uint32_t my_ip;
 
 inline static int get_timestamp(struct trans_file_entry *file_e)
 {
@@ -36,10 +33,10 @@ inline static int get_timestamp(struct trans_file_entry *file_e)
 static void targets_dump(struct monitor_table *table)
 {
 	struct list_head *pos;
-	int fd = open(TARGET_FILE, O_RDWR | O_CREAT | O_TRUNC | O_APPEND,
+	int fd = open(CLIENT_TARGET_FILE, O_RDWR | O_CREAT | O_TRUNC | O_APPEND,
 			S_IRUSR | S_IWUSR);
 	if (fd < 0) {
-		_error("Could not open '%s'\n", TARGET_FILE);
+		_error("Could not open '%s'\n", CLIENT_TARGET_FILE);
 		return;
 	}
 
@@ -159,29 +156,28 @@ static void file_monitor_cleanup(void *arg)
 
 void *file_monitor_task(void *arg)
 {
-	struct thread_arg *targ = arg;
+	struct client_thread_arg *targ = arg;
 	char **target_dirs;
 	char event_buf[EVENT_BUF_LEN] = { 0 };
 	struct inotify_event *event;
 	struct trans_file_table file_table;
 	struct ptot_packet packet;
 	struct monitor_table m_table;
-	int i, offset, target_n, fd;
+	int i, offset, target_n, conn;
 	long int ret = -1;
 	ssize_t len;
 
 	target_n = targ->conf.target_n;
 	target_dirs = targ->conf.target_dirs;
-
-	fd = inotify_init();
-	if (fd < 0) {
-		_error("inotify_init failed\n");
-		goto out;
-	}
+	conn = targ->conn;
 
 	bzero(&m_table, sizeof(struct monitor_table));
 	INIT_LIST_HEAD(&m_table.head);
-	m_table.fd = fd;
+	m_table.fd = inotify_init();
+	if (m_table.fd < 0) {
+		_error("inotify_init failed\n");
+		goto out;
+	}
 
 	for (i = 0; i < target_n; i++) {
 		if (watch_target_add(&m_table, target_dirs[i]) != 0) {
@@ -194,7 +190,7 @@ void *file_monitor_task(void *arg)
 	pthread_cleanup_push(file_monitor_cleanup, &m_table);
 
 	while (1) {
-		len = read(fd, event_buf, EVENT_BUF_LEN);
+		len = read(m_table.fd, event_buf, EVENT_BUF_LEN);
 		bzero(&file_table, sizeof(struct trans_file_table));
 		
 		for (offset = 0, i = 0; offset < len && i < MAX_FILE_ENTRIES;
@@ -219,7 +215,7 @@ void *file_monitor_task(void *arg)
 
 		ptot_packet_init(&packet, PEER_FILE_UPDATE);
 		ptot_packet_fill(&packet, &file_table, trans_table_len(&file_table));
-
+		send_ptot_packet(conn, &packet);
 	}
 
 	pthread_cleanup_pop(0);
