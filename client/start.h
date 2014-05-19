@@ -23,6 +23,5 @@ struct client_thread_arg {
 };
 
 void client_start();
-int client_tcp_listen(uint16_t port);
 
 #endif

@@ -2,17 +2,36 @@
 #define PEER_TABLE_H
 
 #include <pthread.h>
-#include "consts.h"
+#include <stdint.h>
+
+#include <consts.h>
+#include <list.h>
+#include <trans_file_table.h>
+
+#define GET_TIMESTAMP(tv) ((tv)->tv_sec * 1000000 + (tv)->tv_usec)
 
 struct peer_entry {
-	int connfd;
-	long int alive_timestamp;
+	int conn;
+	uint64_t timestamp;	/* last timestamp of alive */
+	struct peer_id peerid;	/* peer ip and port */
+	struct list_head l;	/* entry list */
+	pthread_t tid;		/* receiver thread id */
 };
 
 struct peer_table {
-	unsigned int n;
-	pthread_mutex_t table_mutex;
-	struct peer_entry *entries[MAX_PEER_ENTRIES];
+	int peer_num;			/* num of alive peers */
+	pthread_mutex_t mutex;
+	struct list_head peer_head;	/* linked list of all peers alive */
 };
+
+
+struct peer_entry *peer_entry_alloc();
+int peer_entry_timestamp_update(struct peer_entry *pe);
+
+void peer_table_init(struct peer_table *pt);
+int peer_table_add(struct peer_table *pt, struct peer_entry *pe);
+int peer_table_delete(struct peer_table *pt, struct peer_id *id);
+struct peer_entry *peer_table_find(struct peer_table *pt, uint32_t ip);
+void peer_table_print(struct peer_table *pt);
 
 #endif

@@ -2,16 +2,22 @@
 #define PACKET_H
 
 #include <stdint.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 #include "consts.h"
 
-/**
- * definition of packet from peer to tracker
- */
 
 #define ptot_packet_len(pkt) (sizeof(struct ptot_packet_header) +	\
 			      (pkt)->hdr.data_len)
 #define ttop_packet_len(pkt) (sizeof(struct ttop_packet_header) +	\
 			      (pkt)->hdr.data_len)
+
+
+/**
+ * definition of packet from peer to tracker
+ */
 
 /* packet types from peer to tracker */
 enum ptot_packet_type {
@@ -46,6 +52,7 @@ enum ttop_packet_type {
 	TRACKER_ACCEPT,
 	TRACKER_BROADCAST,
 	TRACKER_SYNC,
+	TRACKER_CLOSE,
 };
 
 /* definition of packet header from tracker to peer */
@@ -65,5 +72,13 @@ struct ttop_packet {
 	struct ttop_packet_header hdr;
 	char data[MAX_PKT_DATA_LEN];		/* empty or latest tracker file table */
 };
+
+
+static inline char *print_ip(uint32_t ip)
+{
+	struct in_addr in;
+	in.s_addr = ip;
+	return inet_ntoa(in);
+}
 
 #endif

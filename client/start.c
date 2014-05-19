@@ -14,7 +14,9 @@
 
 #include <debug.h>
 #include <consts.h>
+#include <packet_def.h>
 #include "start.h"
+#include "packet.h"
 #include "file_monitor.h"
 
 uint32_t my_ip;
@@ -42,8 +44,8 @@ static inline void get_server_ip(char *host_name)
 {
 	struct hostent *host_info;
 	host_info = gethostbyname(host_name);
-	printf("%s, %p\n", host_name, host_info);
 	memcpy(&serv_ip, host_info->h_addr_list[0], host_info->h_length);
+	_debug("server: '%s' %s\n", host_name, print_ip(serv_ip));
 }
 
 static int parse_conf_files(struct client_conf_info *conf)
@@ -118,6 +120,26 @@ static int connect_tracker()
 	return fd;
 }
 
+static inline int register_to_tracker(int conn)
+{
+	struct ptot_packet ptot_pkt;
+	struct ttop_packet ttop_pkt;
+	int ret;
+
+	ptot_packet_init(&ptot_pkt, PEER_REGISTER);
+	ret = send_ptot_packet(conn, &ptot_pkt);
+	if (ret < 0)
+		return ret;
+	
+	ret = recv_ttop_packet(conn, &ttop_pkt);
+	if (ret < 0)
+		return ret;
+	if (ttop_pkt.hdr.type != TRACKER_ACCEPT)
+		return -1;
+
+	return 0;
+}
+
 static void client_cleanup()
 {
 	pthread_cancel(file_monitor_id);
@@ -133,12 +155,21 @@ void client_start()
 		_error("parsing '%s' failed\n", CLIENT_CONF_FILE);
 		return;
 	}
+	get_my_ip(targ.conf.device_name);
+	get_server_ip(targ.conf.tracker_host);
+
+	/* connect to tracker */
 	targ.conn = connect_tracker();
 	if (targ.conn < 0)
 		return;
 
-	get_my_ip(targ.conf.device_name);
-	get_server_ip(targ.conf.tracker_host);
+	/* register to tracker */
+	if (register_to_tracker(targ.conn) < 0) {
+		_error("register to tacker failed\n");
+		return;
+	}
+	_debug("Have registered to tracker\n");
+
 	signal(SIGINT, client_cleanup);
 
 	if (pthread_create(&file_monitor_id, NULL, file_monitor_task, &targ) < 0) {
@@ -155,34 +186,4 @@ void client_start()
 	_debug("file_monitor_task OK\n");
 
 	pthread_exit(0);
-}
-
-int client_tcp_listen(uint16_t port)
-{
-	int listenfd, on = 1;
-	struct sockaddr_in servaddr;
-
-	if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-		perror("socket() error");
-		return -1; 
-	}   
-
-	if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
-		perror("setsockopt() error");
-		return -1; 
-	}   
-
-	bzero(&servaddr, sizeof(servaddr));
-	servaddr.sin_family = AF_INET;
-	servaddr.sin_addr.s_addr = htons(INADDR_ANY);
-	servaddr.sin_port = htons(port);
-
-	if (bind(listenfd, (struct sockaddr *)&servaddr, sizeof(servaddr))) {
-		perror("bind() error");
-		return -1; 
-	}   
-
-	listen(listenfd, MAX_CONNECTIONS);
-
-	return listenfd;
 }

@@ -34,12 +34,16 @@ void peer_id_list_add(struct list_head *owner_h, struct trans_file_entry *te);
 
 struct file_entry *file_entry_alloc();
 void file_entry_add(struct file_table *table, struct file_entry *fe);
-void file_entry_update(struct file_entry *fe, struct trans_file_entry *te);
+int file_entry_update(struct file_entry *fe, struct trans_file_entry *te);
 void file_entry_delete(struct file_entry *fe);
 void file_entry_fill_from(struct file_entry *fe, struct trans_file_entry *te);
+void trans_entry_fill_from(struct trans_file_entry *te, struct file_entry *fe);
 
 void file_table_init(struct file_table *table);
-int file_table_add(struct file_table *table, struct trans_file_entry *te);
+struct file_entry *file_table_add(struct file_table *table,
+				  struct trans_file_entry *te);
+struct file_entry *file_table_find(struct file_table *table,
+				   struct trans_file_entry *te);
 int file_table_update(struct file_table *table, struct trans_file_entry *te);
 int file_table_delete(struct file_table *table, struct trans_file_entry *te);
 

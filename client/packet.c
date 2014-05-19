@@ -23,8 +23,9 @@ void ptot_packet_init(struct ptot_packet *pkt, enum ptot_packet_type type)
 
 inline void ptot_packet_fill(struct ptot_packet *pkt, void *buf, int len)
 {
-	if (pkt == NULL)
+	if (pkt == NULL || buf == NULL)
 		return;
+
 	memcpy(pkt->data, buf, len);
 	pkt->hdr.data_len = len;
 }
@@ -59,4 +60,34 @@ int recv_ttop_packet(int conn, struct ttop_packet *pkt)
 	memcpy(pkt, buf, sizeof(struct ttop_packet));
 
 	return ret;
+}
+
+int client_tcp_listen(uint16_t port)
+{
+	int listenfd, on = 1;
+	struct sockaddr_in servaddr;
+
+	if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+		perror("socket() error");
+		return -1; 
+	}   
+
+	if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on))) {
+		perror("setsockopt() error");
+		return -1; 
+	}   
+
+	bzero(&servaddr, sizeof(servaddr));
+	servaddr.sin_family = AF_INET;
+	servaddr.sin_addr.s_addr = htons(INADDR_ANY);
+	servaddr.sin_port = htons(port);
+
+	if (bind(listenfd, (struct sockaddr *)&servaddr, sizeof(servaddr))) {
+		perror("bind() error");
+		return -1; 
+	}   
+
+	listen(listenfd, MAX_CONNECTIONS);
+
+	return listenfd;
 }
