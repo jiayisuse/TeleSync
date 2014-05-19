@@ -26,6 +26,7 @@ struct monitor_table {
 };
 
 void *file_monitor_task(void *arg);
+
 struct monitor_target *file_monitor_block(char *file_name);
 void file_monitor_unblock(struct monitor_target *target);
 

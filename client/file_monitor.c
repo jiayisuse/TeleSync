@@ -175,6 +175,12 @@ static void print_file_table()
 				file_table.entries[i].op_type);
 }
 
+/**
+ * tell inotify not monitor add and modify operations.
+ * You MUST call it just before creating a new file
+ * @return: the monitor target, which should be used to call
+ *          file_monitor_unblock() later
+ */
 struct monitor_target *file_monitor_block(char *file_name)
 {
 	struct list_head *pos;
@@ -196,6 +202,12 @@ struct monitor_target *file_monitor_block(char *file_name)
 	return NULL;
 }
 
+/**
+ * tell inotify to monitor add and modify operations.
+ * You MUST call it immediately when you finish wrting file
+ * @target: the monitor target pointer returned by
+ *          file_monitor_block()
+ */
 inline void file_monitor_unblock(struct monitor_target *target)
 {
 	if (target == NULL)
