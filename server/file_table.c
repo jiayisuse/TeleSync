@@ -140,7 +140,7 @@ struct file_entry *__file_table_search(struct file_table *table, char *name)
 	int key = ELFhash(name);
 
 	hash_for_each_possible(table->file_htable, fe, hlist, key)
-		if (strcmp(fe->name, name))
+		if (strcmp(fe->name, name) == 0)
 			return fe;
 
 	return NULL;
@@ -205,7 +205,7 @@ int file_table_update(struct file_table *table, struct trans_file_entry *te)
 	pthread_mutex_lock(&table->mutex);
 	fe = __file_table_search(table, te->name);
 	if (fe == NULL)
-		_error("file '%s' does not exists!\n", te->name);
+		_error("file '%s' does not exist!\n", te->name);
 	else {
 		file_entry_update(fe, te);
 		ret = 0;
@@ -226,7 +226,7 @@ int file_table_delete(struct file_table *table, struct trans_file_entry *te)
 	pthread_mutex_lock(&table->mutex);
 	fe = __file_table_search(table, te->name);
 	if (fe == NULL)
-		_error("file '%s' does not exists!\n", te->name);
+		_error("file '%s' does not exist!\n", te->name);
 	else {
 		file_entry_delete(fe);
 		ret = 0;

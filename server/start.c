@@ -59,6 +59,8 @@ static void broadcast_update(struct peer_table *pt, struct trans_file_table *tft
 	struct list_head *pos;
 	struct ttop_packet pkt;
 
+	_enter();
+
 	if (pt == NULL || tft == NULL)
 		return;
 
@@ -73,6 +75,8 @@ static void broadcast_update(struct peer_table *pt, struct trans_file_table *tft
 			_error("fail to send BROADCAST to peer(%u)\n",
 					pe->peerid.ip);
 	}
+
+	_leave();
 }
 
 /* checks every INTERVAL time to see if a peer is still alive,
@@ -211,6 +215,7 @@ void *peer_file_update_task(void *arg)
 	/* extracts the trans_file_table sent by receiver_handler_task thread */
 	struct trans_file_table *tft = (struct trans_file_table *)arg;
 	struct trans_file_table new_tft;
+	enum operation_type op_type;
 	int entry_n = tft->n;
 	int i;
 
@@ -255,16 +260,25 @@ void *peer_file_update_task(void *arg)
 			if (fe == NULL) {
 				_debug("\t'%s' not exists, conflict!\n",
 						te->name);
-				continue;
+				file_table_add(&ft, te);
+				op_type = FILE_ADD;
+			} else {
+				file_entry_update(fe, te);
+				op_type = FILE_MODIFY;
 			}
-
-			file_entry_update(fe, te);
 
 			trans_entry_fill_from(new_tft.entries + new_tft.n,
 					fe);
-			new_tft.entries[new_tft.n].op_type = FILE_MODIFY;
+			new_tft.entries[new_tft.n].op_type = op_type;
 			new_tft.n++;
 
+			break;
+
+		case FILE_NONE:
+			_debug("{ FILE_NONE } '%s'\n", te->name);
+			break;
+
+		default:
 			break;
 		}
 	}
@@ -274,6 +288,8 @@ void *peer_file_update_task(void *arg)
 	if (new_tft.n > 0)
 		broadcast_update(&pt, &new_tft);
 
+	_leave();
+	free(tft);
 	pthread_exit((void *)0);
 }
 
@@ -285,7 +301,6 @@ static void *receiver_task(void *arg)
 
 	_enter();
 
-	bzero(&pkt, sizeof(struct ptot_packet));
 	while (recv_ptot_packet(conn, &pkt) > 0) {
 		pthread_t new_tid;
 		enum ptot_packet_type type = pkt.hdr.type;
@@ -338,10 +353,11 @@ static void *receiver_task(void *arg)
 			   passes the trans_file_table structure it needs to
 			   handle as argument */
 			pthread_create(&new_tid, NULL,
-					peer_file_update_task, (void *)tft);
+					peer_file_update_task, tft);
+			break;
+		default:
 			break;
 		}
-		bzero(&pkt, sizeof(struct ptot_packet));
 	}
 
 	_leave();

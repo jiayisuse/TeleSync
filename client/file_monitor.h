@@ -3,8 +3,10 @@
 
 #include <list.h>
 
-#define INOTIRY_WATCH_MASK	(IN_CREATE | IN_DELETE | IN_DELETE_SELF |	\
+#define DEFAULT_WATCH_MASK	(IN_CREATE | IN_DELETE | IN_DELETE_SELF |	\
 				 IN_MODIFY | IN_MOVE_SELF |			\
+				 IN_MOVED_FROM | IN_MOVED_TO)
+#define BLOCK_CREATE_MAST	(IN_DELETE | IN_DELETE_SELF | IN_MOVE_SELF |	\
 				 IN_MOVED_FROM | IN_MOVED_TO)
 #define EVENT_LEN		(sizeof(struct inotify_event ))
 #define EVENT_BUF_LEN		(1024 * (EVENT_LEN + 16))
@@ -24,5 +26,7 @@ struct monitor_table {
 };
 
 void *file_monitor_task(void *arg);
+struct monitor_target *file_monitor_block(char *file_name);
+void file_monitor_unblock(struct monitor_target *target);
 
 #endif

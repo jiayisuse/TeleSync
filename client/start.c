@@ -25,6 +25,7 @@ uint32_t serv_ip;
 
 static pthread_t file_monitor_tid;
 static pthread_t keep_alive_tid;
+static pthread_t receiver_tid;
 static struct ttop_control_info ctr_info;
 
 
@@ -156,6 +157,7 @@ static void client_cleanup()
 {
 	pthread_cancel(file_monitor_tid);
 	pthread_cancel(keep_alive_tid);
+	pthread_cancel(receiver_tid);
 	exit(0);
 }
 
@@ -170,8 +172,6 @@ static void *keep_alive_task(void *arg)
 	timestamp = get_current_timestamp();
 	ptot_packet_fill(&pkt, &timestamp, sizeof(timestamp));
 
-	signal(SIGPIPE, client_cleanup);
-
 	while (1) {
 		usleep(ctr_info.interval);
 		if (send_ptot_packet(conn, &pkt) < 0) {
@@ -180,7 +180,30 @@ static void *keep_alive_task(void *arg)
 		}
 	}
 
-	pthread_cancel(file_monitor_tid);
+	pthread_exit((void *)0);
+}
+
+static void *receiver_task(void *arg)
+{
+	struct client_thread_arg *targ = arg;
+	int conn = targ->conn;
+	struct ttop_packet pkt;
+
+	pthread_wait_notify(&targ->wait, THREAD_RUNNING);
+	while (recv_ttop_packet(conn, &pkt) > 0) {
+		switch (pkt.hdr.type) {
+		case TRACKER_BROADCAST:
+			_debug("[ TRACKER_BROADCAST ] from tracker\n");
+			break;
+		case TRACKER_SYNC:
+			_debug("[ TRACKER_SYNC ] from tracker\n");
+			break;
+		case TRACKER_CLOSE:
+			_debug("[ TRACKER_CLOSE ] from tracker\n");
+			break;
+		}
+	}
+
 	pthread_exit((void *)0);
 }
 
@@ -209,18 +232,21 @@ void client_start()
 	_debug("Have registered to tracker\n");
 
 	signal(SIGINT, client_cleanup);
+	signal(SIGPIPE, client_cleanup);
 
+	/* create keep alive thread */
 	if (pthread_create(&keep_alive_tid, NULL, keep_alive_task, &targ) < 0) {
 		_error("Creating file monitor task failed\n");
 		return;
 	}
 
+	/* create file monitor thread */
 	if (pthread_create(&file_monitor_tid, NULL, file_monitor_task, &targ) < 0) {
 		pthread_cancel(keep_alive_tid);
 		_error("Creating file monitor task failed\n");
 		return;
 	}
-
+	/* wait until the file monitor thread init successfully */
 	pthread_wait_init(&targ.wait);
 	pthread_wait_for(&targ.wait);
 	if (targ.wait.status == THREAD_FAILED) {
@@ -228,6 +254,16 @@ void client_start()
 		return;
 	}
 	_debug("file_monitor_task OK\n");
+	
+	/* create receiver thread to avoid destroy ctr+c handler */
+	if (pthread_create(&receiver_tid, NULL, receiver_task, &targ) < 0) {
+		pthread_cancel(keep_alive_tid);
+		pthread_cancel(file_monitor_tid);
+		_error("Creating file monitor task failed\n");
+		return;
+	}
+	pthread_wait_init(&targ.wait);
+	pthread_wait_for(&targ.wait);
 
 	pthread_exit(0);
 }
