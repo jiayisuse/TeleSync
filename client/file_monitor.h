@@ -15,6 +15,7 @@
 struct monitor_target {
 	int wd;
 	char name[MAX_NAME_LEN];
+	char local_name[MAX_NAME_LEN];
 	struct list_head l;
 };
 

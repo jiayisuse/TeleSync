@@ -267,8 +267,7 @@ void *peer_file_update_task(void *arg)
 				op_type = FILE_MODIFY;
 			}
 
-			trans_entry_fill_from(new_tft.entries + new_tft.n,
-					fe);
+			trans_entry_fill_from(new_tft.entries + new_tft.n, fe);
 			new_tft.entries[new_tft.n].op_type = op_type;
 			new_tft.n++;
 

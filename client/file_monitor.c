@@ -3,9 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <stdbool.h>
 #include <errno.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -27,33 +27,15 @@ static struct ptot_packet pkt;
 static struct trans_file_table file_table;
 
 
-inline static int get_timestamp(struct trans_file_entry *file_e)
+inline static int get_timestamp(struct trans_file_entry *file_e, char *name)
 {
 	struct stat st;
-	if (stat(file_e->name, &st) < 0) {
+	if (stat(name, &st) < 0) {
 		perror("stat error");
 		return -1;
 	} else {
 		file_e->timestamp = st.st_mtime;
 		return 0;
-	}
-}
-
-static void targets_dump(struct monitor_table *table)
-{
-	struct list_head *pos;
-	int fd = open(CLIENT_TARGET_FILE, O_RDWR | O_CREAT | O_TRUNC | O_APPEND,
-			S_IRUSR | S_IWUSR);
-	if (fd < 0) {
-		_error("Could not open '%s'\n", CLIENT_TARGET_FILE);
-		return;
-	}
-
-	list_for_each(pos, &table->head) {
-		struct monitor_target *target;
-		target = list_entry(pos, struct monitor_target, l);
-		write(fd, target->name, strlen(target->name));
-		write(fd, "\n", 1);
 	}
 }
 
@@ -79,7 +61,8 @@ static void unwatch_and_free_targets(struct monitor_table *table)
 	bzero(table, sizeof(struct monitor_table));
 }
 
-static int watch_target_add(struct monitor_table *table, char *name)
+static int watch_target_add(struct monitor_table *table,
+			    char *name, char *local_name)
 {
 	struct monitor_target *target;
 
@@ -96,6 +79,7 @@ static int watch_target_add(struct monitor_table *table, char *name)
 		return -1;
 	}
 	strcpy(target->name, name);
+	strcpy(target->local_name, local_name);
 	INIT_LIST_ELM(&target->l);
 
 	/* add target to target table */
@@ -108,11 +92,46 @@ static int watch_target_add(struct monitor_table *table, char *name)
 	return 0;
 }
 
+static int watch_target_add_dir(struct monitor_table *table,
+				char *dir, char *local_dir)
+{
+	DIR *root;
+	struct dirent *d;
+	int ret = 0;
+
+	if (dir == NULL)
+		return -1;
+
+	watch_target_add(table, dir, local_dir);
+
+	if ((root = opendir(dir)) == NULL) {
+		_error("target '%s' open failed\n", dir);
+		return -1;
+	}
+
+	while ((d = readdir(root)) != NULL) {
+		if (d->d_type == DT_DIR) {
+			char new_dir[MAX_NAME_LEN];
+			char new_local_dir[MAX_NAME_LEN];
+			sprintf(new_dir, "%s/%s", dir, d->d_name);
+			sprintf(new_local_dir, "%s/%s", local_dir, d->d_name);
+			if (strcmp(d->d_name, ".") == 0 ||
+					strcmp(d->d_name, "..") == 0)
+				continue;
+			ret = watch_target_add_dir(table, new_dir, new_local_dir)
+				|| ret;
+		}
+	}
+	closedir(root);
+
+	return ret;
+}
+
 static int handle_event(struct inotify_event *event,
 			struct trans_file_entry *file_e,
-			struct monitor_table *table)
+			char *file_name)
 {
-	char *target_name = table->targets[event->wd]->name;
+	char *target_name = m_table.targets[event->wd]->name;
 	int ret = 0;
 
 	file_e->file_type = event->mask & IN_ISDIR ? DIRECTORY : REGULAR;
@@ -126,14 +145,14 @@ static int handle_event(struct inotify_event *event,
 	} else if (event->mask & IN_DELETE_SELF) {
 		file_e->op_type = FILE_DELETE;
 		_debug("INOTIFY: Target '%s' was itself deleted\n", target_name);
-		unwatch_and_free_target(table, table->targets[event->wd]);
+		unwatch_and_free_target(&m_table, m_table.targets[event->wd]);
 	} else if (event->mask & IN_MODIFY) {
 		file_e->op_type = FILE_MODIFY;
 		//_debug("INOTIFY '%s' was modified\n", file_e->name);
 	} else if (event->mask & IN_MOVE_SELF) {
 		file_e->op_type = FILE_DELETE;
 		_debug("INOTIFY: Target '%s' was itself moved", target_name);
-		unwatch_and_free_target(table, table->targets[event->wd]);
+		unwatch_and_free_target(&m_table, m_table.targets[event->wd]);
 	} else if (event->mask & IN_MOVED_FROM) {
 		file_e->op_type = FILE_DELETE;
 		_debug("INOTIFY: '%s' moved out\n", file_e->name);
@@ -147,10 +166,10 @@ static int handle_event(struct inotify_event *event,
 	}
 
 	if (file_e->op_type == FILE_ADD && file_e->file_type == DIRECTORY)
-		ret = watch_target_add(table, file_e->name);
+		ret = watch_target_add(&m_table, file_name, file_e->name);
 
 	if (file_e->op_type != FILE_DELETE && file_e->op_type != FILE_NONE) {
-		ret = get_timestamp(file_e);
+		ret = get_timestamp(file_e, file_name);
 		if (ret < 0)
 			_debug("Get timestamp for '%s' failed, skip\n",
 					file_e->name);
@@ -161,11 +180,10 @@ static int handle_event(struct inotify_event *event,
 
 static void file_monitor_cleanup(void *arg)
 {
-	struct monitor_table *table = arg;
-	targets_dump(table);
-	unwatch_and_free_targets(table);
+	unwatch_and_free_targets(&m_table);
 }
 
+/*
 static void print_file_table()
 {
 	int i = 0;
@@ -174,6 +192,7 @@ static void print_file_table()
 		printf("%-60s OP(#%d)\n", file_table.entries[i].name,
 				file_table.entries[i].op_type);
 }
+*/
 
 /**
  * tell inotify not monitor add and modify operations.
@@ -239,15 +258,19 @@ void *file_monitor_task(void *arg)
 		goto out;
 	}
 
-	for (i = 0; i < target_n; i++)
-		ret = watch_target_add(&m_table, target_dirs[i]) && ret;
+	for (i = 0; i < target_n; i++) {
+		char local_dir[MAX_NAME_LEN];
+		sprintf(local_dir, "%d", i + 1);
+		ret = watch_target_add_dir(&m_table, target_dirs[i], local_dir)
+			&& ret;
+	}
 
 	if (ret != 0) {
 		pthread_wait_notify(&targ->wait, THREAD_FAILED);
 		goto unwatch_and_free_mtable;
 	}
 	pthread_wait_notify(&targ->wait, THREAD_RUNNING);
-	pthread_cleanup_push(file_monitor_cleanup, &m_table);
+	pthread_cleanup_push(file_monitor_cleanup, NULL);
 
 	bzero(&file_table, sizeof(struct trans_file_table));
 	while (1) {
@@ -259,7 +282,7 @@ void *file_monitor_task(void *arg)
 		for (offset = 0;
 		     offset < len && file_table.n < MAX_FILE_ENTRIES;
 		     offset += EVENT_LEN + event->len, file_table.n++) {
-			char *target_dir;
+			char *dir, *local_dir, new_name[MAX_NAME_LEN];
 			struct trans_file_entry *file_e =
 				file_table.entries + file_table.n;
 
@@ -268,21 +291,24 @@ void *file_monitor_task(void *arg)
 				file_table.n--;
 				continue;
 			}
-			target_dir = m_table.targets[event->wd]->name;
-			if (event->len)
+			local_dir = m_table.targets[event->wd]->local_name;
+			dir = m_table.targets[event->wd]->name;
+			if (event->len) {
 				sprintf(file_e->name, "%s/%s",
-						target_dir, event->name);
-			else
-				strcpy(file_e->name, target_dir);
+						local_dir, event->name);
+				sprintf(new_name, "%s/%s", dir, event->name);
+			} else {
+				strcpy(file_e->name, local_dir);
+				strcpy(new_name, event->name);
+			}
 
-			if (handle_event(event, file_e, &m_table) != 0)
+			if (handle_event(event, file_e, new_name) != 0)
 				file_table.n--;
 		}
 
 		ptot_packet_init(&pkt, PEER_FILE_UPDATE);
 		ptot_packet_fill(&pkt, &file_table, trans_table_len(&file_table));
 		send_ptot_packet(conn, &pkt);
-		print_file_table();
 	}
 
 	pthread_cleanup_pop(0);
