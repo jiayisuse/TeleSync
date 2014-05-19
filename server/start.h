@@ -10,9 +10,9 @@
 #define SERVER_CONF_FILE	"./server/server.conf"
 
 struct server_thread_arg {
-	int conn;
-	pthread_t tid;
-	struct peer_id peerid;	/* peer ip and peer port */
+	int		conn;
+	pthread_t	tid;
+	struct peer_id	peerid;	/* peer ip and peer port */
 };
 
 void server_start();

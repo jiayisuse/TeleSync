@@ -8,7 +8,6 @@
 #include <list.h>
 #include <trans_file_table.h>
 
-#define GET_TIMESTAMP(tv) ((tv)->tv_sec * 1000000 + (tv)->tv_usec)
 
 struct peer_entry {
 	int conn;
@@ -26,7 +25,6 @@ struct peer_table {
 
 
 struct peer_entry *peer_entry_alloc();
-int peer_entry_timestamp_update(struct peer_entry *pe);
 
 void peer_table_init(struct peer_table *pt);
 int peer_table_add(struct peer_table *pt, struct peer_entry *pe);

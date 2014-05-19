@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <netdb.h>
+#include <sys/time.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <netinet/in.h>
@@ -22,7 +23,9 @@
 uint32_t my_ip;
 uint32_t serv_ip;
 
-static pthread_t file_monitor_id;
+static pthread_t file_monitor_tid;
+static pthread_t keep_alive_tid;
+static struct ttop_control_info ctr_info;
 
 
 static void get_my_ip(char *if_name)
@@ -45,7 +48,14 @@ static inline void get_server_ip(char *host_name)
 	struct hostent *host_info;
 	host_info = gethostbyname(host_name);
 	memcpy(&serv_ip, host_info->h_addr_list[0], host_info->h_length);
-	_debug("server: '%s' %s\n", host_name, print_ip(serv_ip));
+	_debug("server: '%s' %s\n", host_name, ip_string(serv_ip));
+}
+
+static inline uint64_t get_current_timestamp()
+{
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return GET_TIMESTAMP(&tv);
 }
 
 static int parse_conf_files(struct client_conf_info *conf)
@@ -137,13 +147,41 @@ static inline int register_to_tracker(int conn)
 	if (ttop_pkt.hdr.type != TRACKER_ACCEPT)
 		return -1;
 
+	memcpy(&ctr_info, ttop_pkt.data, ttop_pkt.hdr.data_len);
+
 	return 0;
 }
 
 static void client_cleanup()
 {
-	pthread_cancel(file_monitor_id);
+	pthread_cancel(file_monitor_tid);
+	pthread_cancel(keep_alive_tid);
 	exit(0);
+}
+
+static void *keep_alive_task(void *arg)
+{
+	struct client_thread_arg *targ = arg;
+	int conn = targ->conn;
+	uint64_t timestamp;
+	struct ptot_packet pkt;
+
+	ptot_packet_init(&pkt, PEER_KEEP_ALIVE);
+	timestamp = get_current_timestamp();
+	ptot_packet_fill(&pkt, &timestamp, sizeof(timestamp));
+
+	signal(SIGPIPE, client_cleanup);
+
+	while (1) {
+		usleep(ctr_info.interval);
+		if (send_ptot_packet(conn, &pkt) < 0) {
+			_debug("Server has been down\n");
+			break;
+		}
+	}
+
+	pthread_cancel(file_monitor_tid);
+	pthread_exit((void *)0);
 }
 
 void client_start()
@@ -172,7 +210,13 @@ void client_start()
 
 	signal(SIGINT, client_cleanup);
 
-	if (pthread_create(&file_monitor_id, NULL, file_monitor_task, &targ) < 0) {
+	if (pthread_create(&keep_alive_tid, NULL, keep_alive_task, &targ) < 0) {
+		_error("Creating file monitor task failed\n");
+		return;
+	}
+
+	if (pthread_create(&file_monitor_tid, NULL, file_monitor_task, &targ) < 0) {
+		pthread_cancel(keep_alive_tid);
 		_error("Creating file monitor task failed\n");
 		return;
 	}

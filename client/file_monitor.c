@@ -161,7 +161,7 @@ void *file_monitor_task(void *arg)
 	char event_buf[EVENT_BUF_LEN] = { 0 };
 	struct inotify_event *event;
 	struct trans_file_table file_table;
-	struct ptot_packet packet;
+	struct ptot_packet pkt;
 	struct monitor_table m_table;
 	int i, offset, target_n, conn;
 	long int ret = -1;
@@ -213,9 +213,9 @@ void *file_monitor_task(void *arg)
 		}
 		file_table.n = i;
 
-		ptot_packet_init(&packet, PEER_FILE_UPDATE);
-		ptot_packet_fill(&packet, &file_table, trans_table_len(&file_table));
-		send_ptot_packet(conn, &packet);
+		ptot_packet_init(&pkt, PEER_FILE_UPDATE);
+		ptot_packet_fill(&pkt, &file_table, trans_table_len(&file_table));
+		send_ptot_packet(conn, &pkt);
 	}
 
 	pthread_cleanup_pop(0);

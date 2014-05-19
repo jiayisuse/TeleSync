@@ -85,6 +85,7 @@ void *peer_check_alive_task(void *arg)
 	/* extracs arguments */
 	struct server_thread_arg *targ = (struct server_thread_arg*)arg;
 	uint32_t ip = targ->peerid.ip;
+	uint64_t last_timestamp = 0;
 	pthread_t receiver_tid = targ->tid;
 
 	free(targ);
@@ -94,7 +95,7 @@ void *peer_check_alive_task(void *arg)
 		struct peer_entry *pe;
 		struct timeval current_time;
 		/* sleep for INTERVAL time */
-		usleep(ctr_info.interval);
+		usleep(ctr_info.interval + CHECK_ALIVE_DIFF);
 
 		pe = peer_table_find(&pt, ip);
 		if (pe == NULL) {
@@ -105,12 +106,15 @@ void *peer_check_alive_task(void *arg)
 
 		/* check if peer is alive */
 		gettimeofday(&current_time, NULL);
-		if (GET_TIMESTAMP(&current_time) - pe->timestamp >
-				ctr_info.interval) {
-			_debug("peer (ip:%s) has died\n", print_ip(pe->peerid.ip));
+		pthread_mutex_lock(&pt.mutex);
+		if (pe->timestamp == last_timestamp) {
+			_debug("DIED! peer (ip:%s)\n", ip_string(pe->peerid.ip));
+			pthread_mutex_unlock(&pt.mutex);
 			pthread_cancel(receiver_tid);
 			pthread_exit((void *)0);
 		}
+		last_timestamp = pe->timestamp;
+		pthread_mutex_unlock(&pt.mutex);
 	}
 
 	pthread_exit((void *)0);
@@ -185,8 +189,6 @@ static void *peer_life_update_task(void *arg)
 	struct peer_entry *pe = peer_table_find(&pt, ip);
 	long int ret = -1;
 
-	_enter();
-
 	if (pe == NULL) {
 		_error("peer entry (ip:%u) doesn't exist\n", ip);
 		goto out;
@@ -194,14 +196,10 @@ static void *peer_life_update_task(void *arg)
 
 	/* update peer timestamp */
 	pthread_mutex_lock(&pt.mutex);
-	if (peer_entry_timestamp_update(pe) < 0)
-		_error("fail to update peer(%u) timestamp\n", ip);
-	else
-		ret = 0;
+	pe->timestamp += ctr_info.interval;
 	pthread_mutex_unlock(&pt.mutex);
 
 out:
-	_leave();
 	pthread_exit((void *)ret);
 }
 
@@ -299,7 +297,7 @@ static void *receiver_task(void *arg)
 
 		switch (type) {
 		case PEER_REGISTER:
-			_debug("< PEER_REGISTER from '%s'>\n", print_ip(ip));
+			_debug("[ PEER_REGISTER from '%s']\n", ip_string(ip));
 			/* create a structure of arguments that needs to pass
 			   to peer_register_handler_task thread */
 			targ = calloc(1, sizeof(*targ));
@@ -317,17 +315,17 @@ static void *receiver_task(void *arg)
 					(void *)targ);
 			break;
 		case PEER_KEEP_ALIVE:
-			_debug("< PEER_KEEP_ALIVE from '%s'>\n", print_ip(ip));
+			_debug("[ PEER_KEEP_ALIVE from '%s']\n", ip_string(ip));
 			/* creates peer_life_update_task thread */
 			pthread_create(&new_tid, NULL,
 					peer_life_update_task,
 					(void *)(long int)ip);
 			break;
 		case PEER_SYNC:
-			_debug("< PEER_SYNC from '%s'>\n", print_ip(ip));
+			_debug("[ PEER_SYNC from '%s']\n", ip_string(ip));
 			break;
 		case PEER_FILE_UPDATE:
-			_debug("< PEER_FILE_UPDATE from '%s'>\n", print_ip(ip));
+			_debug("[ PEER_FILE_UPDATE from '%s']\n", ip_string(ip));
 			/* extracts trans_file_table from received packet's
 			   data field */
 			tft = calloc(1, sizeof(*tft));

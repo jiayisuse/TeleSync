@@ -13,6 +13,7 @@
 			      (pkt)->hdr.data_len)
 #define ttop_packet_len(pkt) (sizeof(struct ttop_packet_header) +	\
 			      (pkt)->hdr.data_len)
+#define GET_TIMESTAMP(tv) ((tv)->tv_sec * 1000000 + (tv)->tv_usec)
 
 
 /**
@@ -74,7 +75,7 @@ struct ttop_packet {
 };
 
 
-static inline char *print_ip(uint32_t ip)
+static inline char *ip_string(uint32_t ip)
 {
 	struct in_addr in;
 	in.s_addr = ip;

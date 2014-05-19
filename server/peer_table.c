@@ -7,10 +7,12 @@
 
 #include <debug.h>
 #include <list.h>
+#include <packet_def.h>
 #include "peer_table.h"
 
 /**
- * peer entry operations
+ * peer entry allocation function, which also finishes some
+ * default initialization
  */
 
 inline struct peer_entry *peer_entry_alloc()
@@ -26,24 +28,6 @@ inline struct peer_entry *peer_entry_alloc()
 	INIT_LIST_ELM(&pe->l);
 	 
 	return pe;
-}
-
-/**
- * update the timestamp of an entry
- * @pe: peer entry to be updated
- * return 0 if success, -1 otherwise
- */
-int peer_entry_timestamp_update(struct peer_entry *pe)
-{
-	struct timeval current_time;
-
-	if (pe == NULL)
-		return -1;
-
-	gettimeofday(&current_time, NULL);
-	pe->timestamp = GET_TIMESTAMP(&current_time);
-
-	return 0;
 }
 
 /**

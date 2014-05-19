@@ -9,6 +9,7 @@
 #define MAX_TARGET_DIR		2048
 #define MAX_PKT_DATA_LEN	4096
 #define MAX_CONNECTIONS		1024
+#define CHECK_ALIVE_DIFF	100	/* check alive different micro sec */
 
 #define TRACKER_RECEIVER_PORT	4092
 #define PEER_TRACKER_PORT	4192
