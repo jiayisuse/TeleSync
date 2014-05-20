@@ -1,0 +1,17 @@
+1. Checkout from this repository:
+   git clone https://github.com/jiayisuse/cs60.git
+
+2. Add a new file to repository index:
+   git add <your file OR dir>
+
+3. Check file status:
+   git status
+
+4. Check current modification:
+   git diff
+
+5. Commit change to local repository:
+   git commit -a -m "your brief description about this commit"
+
+6. Push up to server
+   git push -u origin master

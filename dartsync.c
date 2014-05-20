@@ -3,10 +3,11 @@
 #include <string.h>
 #include <getopt.h>
 
-#include <start.h>
 #include <debug.h>
-#include <file_table.h>
+#include <packet_def.h>
 #include <trans_file_table.h>
+#include "client/start.h"
+#include "server/start.h"
 
 int debug = 0;
 
@@ -28,7 +29,7 @@ static const struct option long_options[] = {
 static void usage(FILE *fp, char **argv)
 {
 	fprintf(fp,
-		"Usage: %s [-m client|server]\n\n"
+		"Usage: %s [-m client|server] [-i device name]\n\n"
 		"Options:\n"
 		"-m | --mode          client|server\n"
 		"-d | --open debug    print debug info\n"
@@ -60,12 +61,8 @@ int main(int argc, char **argv)
 				mode = SERVER;
 			else if (strcmp(optarg, "client") == 0)
 				mode = CLIENT;
-			else {
-				usage(stdout, argv);
-				exit(EXIT_SUCCESS);
-			}
 			break;
-
+			
 		case 'h':
 			usage(stdout, argv);
 			exit(EXIT_SUCCESS);
