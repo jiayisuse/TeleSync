@@ -31,7 +31,7 @@ static pthread_t ptop_listening_tid;
 static struct ttop_control_info ctr_info;
 static struct client_thread_arg targ;
 
-static struct file_table ft;
+struct file_table ft;
 
 
 static void get_my_ip(char *if_name)
@@ -517,7 +517,7 @@ static void *ttop_receiver_task(void *arg)
 }
 
 /**
- * open and listen on port PEER_TRACKER_PORT for other peer to connect
+ * open and listen on port P2P_PORT for other peer to connect
  * @interval: number of micro-seconds that the function waits for
  * @return: no return value
  */
@@ -530,7 +530,7 @@ static void *ptop_listening_task(void *arg)
 
 	_enter();
 
-	listenfd = client_tcp_listen(PEER_TRACKER_PORT);
+	listenfd = client_tcp_listen(P2P_PORT);
 	if (listenfd < 0)
 		return 0;
 

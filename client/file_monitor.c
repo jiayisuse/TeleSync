@@ -22,32 +22,33 @@
 
 
 extern uint32_t my_ip;
+extern struct file_table ft;
 
 static struct monitor_table m_table;
 static struct ptot_packet pkt;
-static struct trans_file_table file_table;
+static struct trans_file_table tft;
 
 
-inline static int get_trans_timestamp(struct trans_file_entry *file_e, char *name)
+inline static int get_trans_timestamp(struct trans_file_entry *te, char *name)
 {
 	struct stat st;
 	if (stat(name, &st) < 0) {
 		perror("stat error");
 		return -1;
 	} else {
-		file_e->timestamp = st.st_mtime;
+		te->timestamp = st.st_mtime;
 		return 0;
 	}
 }
 
-inline static int get_file_timestamp(struct file_entry *file_e, char *name)
+inline static int get_file_timestamp(struct file_entry *fe, char *name)
 {
 	struct stat st;
 	if (stat(name, &st) < 0) {
 		perror("stat error");
 		return -1;
 	} else {
-		file_e->timestamp = st.st_mtime;
+		fe->timestamp = st.st_mtime;
 		return 0;
 	}
 }
@@ -141,51 +142,69 @@ static int watch_target_add_dir(struct monitor_table *table,
 }
 
 static int handle_event(struct inotify_event *event,
-			struct trans_file_entry *file_e,
+			struct trans_file_entry *te,
 			char *logic_name)
 {
 	char *target_name = m_table.targets[event->wd]->sys_name;
 	int ret = 0;
 
-	file_e->file_type = event->mask & IN_ISDIR ? DIRECTORY : REGULAR;
+	te->file_type = event->mask & IN_ISDIR ? DIRECTORY : REGULAR;
 
 	if (event->mask & IN_CREATE) {
-		file_e->op_type = FILE_ADD;
-		_debug("INOTIFY: '%s' created\n", file_e->name);
+		te->op_type = FILE_ADD;
+		_debug("INOTIFY: '%s' created\n", te->name);
 	} else if (event->mask & IN_DELETE) {
-		file_e->op_type = FILE_DELETE;
-		_debug("INOTIFY: '%s' deleted\n", file_e->name);
+		te->op_type = FILE_DELETE;
+		_debug("INOTIFY: '%s' deleted\n", te->name);
 	} else if (event->mask & IN_DELETE_SELF) {
-		file_e->op_type = FILE_DELETE;
+		te->op_type = FILE_DELETE;
 		_debug("INOTIFY: Target '%s' was itself deleted\n", target_name);
 		unwatch_and_free_target(&m_table, m_table.targets[event->wd]);
 	} else if (event->mask & IN_MODIFY) {
-		file_e->op_type = FILE_MODIFY;
-		//_debug("INOTIFY '%s' was modified\n", file_e->name);
+		te->op_type = FILE_MODIFY;
+		_debug("INOTIFY '%s' was modified\n", te->name);
 	} else if (event->mask & IN_MOVE_SELF) {
-		file_e->op_type = FILE_DELETE;
+		te->op_type = FILE_DELETE;
 		_debug("INOTIFY: Target '%s' was itself moved", target_name);
 		unwatch_and_free_target(&m_table, m_table.targets[event->wd]);
 	} else if (event->mask & IN_MOVED_FROM) {
-		file_e->op_type = FILE_DELETE;
-		_debug("INOTIFY: '%s' moved out\n", file_e->name);
+		te->op_type = FILE_DELETE;
+		_debug("INOTIFY: '%s' moved out\n", te->name);
 	} else if (event->mask & IN_MOVED_TO) {
-		file_e->op_type = FILE_ADD;
-		_debug("INOTIFY: '%s' moved into\n", file_e->name);
+		te->op_type = FILE_ADD;
+		_debug("INOTIFY: '%s' moved into\n", te->name);
 	} else {
-		file_e->op_type = FILE_NONE;
+		te->op_type = FILE_NONE;
 		ret = -1;
-		_debug("INOTIFY: '%s' UN-Known\n", file_e->name);
+		_debug("INOTIFY: '%s' UN-Known\n", te->name);
 	}
 
-	if (file_e->op_type == FILE_ADD && file_e->file_type == DIRECTORY)
-		ret = watch_target_add(&m_table, logic_name, file_e->name);
+	if (te->op_type == FILE_ADD && te->file_type == DIRECTORY)
+		ret = watch_target_add(&m_table, logic_name, te->name);
 
-	if (file_e->op_type != FILE_DELETE && file_e->op_type != FILE_NONE) {
-		ret = get_trans_timestamp(file_e, logic_name);
+	if (te->op_type != FILE_DELETE && te->op_type != FILE_NONE) {
+		ret = get_trans_timestamp(te, logic_name);
 		if (ret < 0)
 			_debug("Get timestamp for '%s' failed, skip\n",
-					file_e->name);
+					te->name);
+	}
+
+	/* fill a owner to the trans file entry */
+	te->owners[te->owner_n].ip = my_ip;
+	te->owners[te->owner_n].port = P2P_PORT;
+	te->owner_n++;
+
+	/* update the file table */
+	switch (te->op_type) {
+	case FILE_ADD:
+		file_table_add(&ft, te);
+		break;
+	case FILE_MODIFY:
+		file_table_update(&ft, te);
+	case FILE_DELETE:
+		file_table_delete(&ft, te);
+	default:
+		break;
 	}
 
 	return ret;
@@ -197,13 +216,13 @@ static void file_monitor_cleanup(void *arg)
 }
 
 /*
-static void print_file_table()
+static void print_tft()
 {
 	int i = 0;
-	printf("N = %d\n", file_table.n);
-	for (i = 0; i < file_table.n; i++)
-		printf("%-60s OP(#%d)\n", file_table.entries[i].name,
-				file_table.entries[i].op_type);
+	printf("N = %d\n", tft.n);
+	for (i = 0; i < tft.n; i++)
+		printf("%-60s OP(#%d)\n", tft.entries[i].name,
+				tft.entries[i].op_type);
 }
 */
 
@@ -215,14 +234,15 @@ static int add_me_to_peer_id_list(struct list_head *head)
 		return -1;
 	}
 	p->ip = my_ip;
-	/* TODO: allocate p2p port dynamically */
 	p->port = P2P_PORT;
 	INIT_LIST_ELM(&p->l);
 	list_add(head, &p->l);
 	return 0;
 }
 
-static int get_file_table_r(struct file_table *ft, char *sys_name, char *logic_name)
+static int get_file_table_r(struct file_table *ft,
+			    char *sys_name,
+			    char *logic_name)
 {
 	DIR *root;
 	struct dirent *d;
@@ -378,43 +398,42 @@ void *file_monitor_task(void *arg)
 	pthread_wait_notify(&targ->wait, THREAD_RUNNING);
 	pthread_cleanup_push(file_monitor_cleanup, NULL);
 
-	bzero(&file_table, sizeof(struct trans_file_table));
+	bzero(&tft, sizeof(struct trans_file_table));
 	while (1) {
 		usleep(100000);
 
 		len = read(m_table.fd, event_buf, EVENT_BUF_LEN);
-		bzero(&file_table, sizeof(file_table));
+		bzero(&tft, sizeof(tft));
 		
 		for (offset = 0;
-		     offset < len && file_table.n < MAX_FILE_ENTRIES;
-		     offset += EVENT_LEN + event->len, file_table.n++) {
+		     offset < len && tft.n < MAX_FILE_ENTRIES;
+		     offset += EVENT_LEN + event->len, tft.n++) {
 			char *sys_dir, *logic_dir, new_name[MAX_NAME_LEN];
-			struct trans_file_entry *file_e =
-				file_table.entries + file_table.n;
+			struct trans_file_entry *te= tft.entries + tft.n;
 
 			event = (struct inotify_event *)(event_buf + offset);
 			if (m_table.targets[event->wd] == NULL) {
-				file_table.n--;
+				tft.n--;
 				continue;
 			}
 			logic_dir = m_table.targets[event->wd]->logic_name;
 			sys_dir = m_table.targets[event->wd]->sys_name;
 			if (event->len) {
-				sprintf(file_e->name, "%s/%s",
+				sprintf(te->name, "%s/%s",
 						logic_dir, event->name);
 				sprintf(new_name, "%s/%s",
 						sys_dir, event->name);
 			} else {
-				strcpy(file_e->name, logic_dir);
+				strcpy(te->name, logic_dir);
 				strcpy(new_name, event->name);
 			}
 
-			if (handle_event(event, file_e, new_name) != 0)
-				file_table.n--;
+			if (handle_event(event, te, new_name) != 0)
+				tft.n--;
 		}
 
 		ptot_packet_init(&pkt, PEER_FILE_UPDATE);
-		ptot_packet_fill(&pkt, &file_table, trans_table_len(&file_table));
+		ptot_packet_fill(&pkt, &tft, trans_table_len(&tft));
 		send_ptot_packet(conn, &pkt);
 	}
 

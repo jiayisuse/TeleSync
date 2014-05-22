@@ -18,7 +18,7 @@ void ptot_packet_init(struct ptot_packet *pkt, enum ptot_packet_type type)
 	bzero(pkt, sizeof(struct ptot_packet));
 	pkt->hdr.type = type;
 	pkt->hdr.ip = my_ip;
-	pkt->hdr.port = PEER_TRACKER_PORT;
+	pkt->hdr.port = P2P_PORT;
 }
 
 inline void ptot_packet_fill(struct ptot_packet *pkt, void *buf, int len)

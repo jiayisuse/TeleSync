@@ -491,6 +491,7 @@ static void *receiver_task(void *arg)
 	pthread_cleanup_pop(0);
 
 	_leave();
+	peer_table_delete(&pt, conn);
 	pthread_exit((void *)0);
 }
 

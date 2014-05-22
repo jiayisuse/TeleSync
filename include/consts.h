@@ -12,7 +12,6 @@
 #define CHECK_ALIVE_DIFF	10000	/* check alive different micro sec */
 
 #define TRACKER_RECEIVER_PORT	4092
-#define PEER_TRACKER_PORT	4192
-#define P2P_PORT		4197
+#define P2P_PORT		4192
 
 #endif
