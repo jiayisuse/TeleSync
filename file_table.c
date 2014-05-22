@@ -12,6 +12,12 @@
  * peer id list operations
  */
 
+/**
+ * add all the owners in trans_file_entry *te to a linked list head
+ * @owner_h: the linked list head to be added
+ * @te: the trans_file_entry in which the owners would be added to
+ *      the new list
+ */
 void peer_id_list_add(struct list_head *owner_h, struct trans_file_entry *te)
 {
 	int i;
@@ -32,6 +38,10 @@ void peer_id_list_add(struct list_head *owner_h, struct trans_file_entry *te)
 	}
 }
 
+/**
+ * unlink and free all the owners in the linked list
+ * @head: the linked list head that points to all the woners
+ */
 inline void peer_id_list_destroy(struct list_head *head)
 {
 	struct list_head *pos, *tmp;
@@ -50,6 +60,9 @@ inline void peer_id_list_destroy(struct list_head *head)
  * file entry operations
  */
 
+/**
+ * file entry allocation which would do some default initialization
+ */
 struct file_entry *file_entry_alloc()
 {
 	struct file_entry *fe = calloc(1, sizeof(struct file_entry));
@@ -61,6 +74,12 @@ struct file_entry *file_entry_alloc()
 	return fe;
 }
 
+/**
+ * link the file entry to the file table
+ * You MUST lock the mutex of the table before calling it
+ * @table: the file table that would be added to
+ * @fe: the file entry than would be added to the tale
+ */
 inline void file_entry_add(struct file_table *table, struct file_entry *fe)
 {
 	if (table == NULL || fe == NULL)
@@ -70,6 +89,11 @@ inline void file_entry_add(struct file_table *table, struct file_entry *fe)
 	table->n++;
 }
 
+/**
+ * fill the file entry from trans file entry
+ * @fe: the file entry which to be filled
+ * @te: the trans file entry which would be fill from
+ */
 void file_entry_fill_from(struct file_entry *fe, struct trans_file_entry *te)
 {
 	if (fe == NULL || te == NULL)
@@ -81,6 +105,11 @@ void file_entry_fill_from(struct file_entry *fe, struct trans_file_entry *te)
 	peer_id_list_add(&fe->owner_head, te);
 }
 
+/**
+ * fill the trans file entry from file entry
+ * @fe: the trans file entry which to be filled
+ * @te: the file entry which would be fill from
+ */
 void trans_entry_fill_from(struct trans_file_entry *te, struct file_entry *fe)
 {
 	struct list_head *pos;
@@ -123,6 +152,11 @@ int file_entry_update(struct file_entry *fe, struct trans_file_entry *te)
 	return 0;
 }
 
+/**
+ * delete the file entry from the file table
+ * @table: the file table which the file entry would be deleted from
+ * @fe: the file entry which would be deleted
+ */
 inline void file_entry_delete(struct file_table *table, struct file_entry *fe)
 {
 	if (table == NULL || fe == NULL)
@@ -151,6 +185,10 @@ struct file_entry *__file_table_search(struct file_table *table, char *name)
 	return NULL;
 }
 
+/**
+ * init a file table
+ * @table: the file table which would be inited
+ */
 inline void file_table_init(struct file_table *table)
 {
 	if (table == NULL)
@@ -161,6 +199,12 @@ inline void file_table_init(struct file_table *table)
 	hash_init(table->file_htable);
 }
 
+/**
+ * find a file entry from the file table
+ * @table: the file table which the file entry would be search from
+ * @te: the trans file entry that would be searched
+ * @return: the corresponding file entry with the trans file entry
+ */
 inline struct file_entry *file_table_find(struct file_table *table,
 					  struct trans_file_entry *te)
 {
@@ -173,6 +217,13 @@ inline struct file_entry *file_table_find(struct file_table *table,
 	return fe;
 }
 
+/**
+ * add a file entry to the file table. if the entry is already there,
+ * it would update it.
+ * @table: the file table which the file entry would be search from
+ * @te: the trans file entry that would be added to
+ * @return: the newly created file entry
+ */
 struct file_entry *file_table_add(struct file_table *table,
 				  struct trans_file_entry *te)
 {
@@ -199,6 +250,12 @@ out:
 	return fe;
 }
 
+/**
+ * update a file entry in the file table
+ * @table: the file table which the file entry would be update from
+ * @te: the trans file entry that would be updated
+ * @return: 0 success, -1 otherwise
+ */
 int file_table_update(struct file_table *table, struct trans_file_entry *te)
 {
 	struct file_entry *fe;
@@ -220,6 +277,12 @@ int file_table_update(struct file_table *table, struct trans_file_entry *te)
 	return ret;
 }
 
+/**
+ * delete a file entry from the file table
+ * @table: the file table which the file entry would be deleted from
+ * @te: the trans file entry that would be deleted
+ * @return: 0 success, -1 otherwise
+ */
 int file_table_delete(struct file_table *table, struct trans_file_entry *te)
 {
 	struct file_entry *fe;
@@ -256,6 +319,10 @@ void file_table_destroy(struct file_table *table)
 	pthread_mutex_unlock(&table->mutex);
 }
 
+/**
+ * destroy a file table
+ * @table: the file table which would be destroyed
+ */
 void file_table_print(struct file_table *table)
 {
 	struct file_entry *fe;
@@ -273,6 +340,11 @@ void file_table_print(struct file_table *table)
 	_debug("----------- END ----------\n\n");
 }
 
+/**
+ * fill a trans file table from the file table
+ * @tft: the trans file table which would be filled
+ * @ft: trans file table which would be filled from
+ */
 void trans_table_fill_from(struct trans_file_table *tft, struct file_table *ft)
 {
 	struct file_entry *fe;
