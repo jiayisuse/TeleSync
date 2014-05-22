@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <pthread.h>
 
@@ -6,11 +7,6 @@
 #include <debug.h>
 #include "file_table.h"
 
-
-
-/**
- * peer id list operations
- */
 
 /**
  * add all the owners in trans_file_entry *te to a linked list head
@@ -362,4 +358,29 @@ void trans_table_fill_from(struct trans_file_table *tft, struct file_table *ft)
 		tft->n++;
 	}
 	pthread_mutex_unlock(&ft->mutex);
+}
+ 
+bool has_same_owners(struct file_entry *fe, struct trans_file_entry *te)
+{
+	struct list_head *pos;
+	int n = 0;
+
+	if (fe == NULL || te == NULL)
+		return false;
+
+	list_for_each(pos, &fe->owner_head)
+		n++;
+
+	if (n != te->owner_n)
+		return false;
+
+	n = 0;
+	list_for_each(pos, &fe->owner_head) {
+		struct peer_id_list *p = list_entry(pos, struct peer_id_list, l);
+		if (p->ip != te->owners[n].ip || p->port != te->owners[n].port)
+			return false;
+		n++;
+	}
+
+	return true;
 }

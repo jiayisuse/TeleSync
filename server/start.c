@@ -106,7 +106,7 @@ void *peer_check_alive_task(void *arg)
 
 		pe = peer_table_find(&pt, ip);
 		if (pe == NULL) {
-			_error("peer entry (ip:%u) doesn't exist\n", ip);
+			_debug("peer entry (ip:%u) doesn't exist\n", ip);
 			pthread_cancel(receiver_tid);
 			pthread_exit(NULL);
 		}
@@ -267,7 +267,9 @@ static void *sync_task(void *arg)
 					      fe);
 			peer_tft->entries[peer_tft->n].op_type = FILE_ADD;
 			peer_tft->n++;
-		} else if (fe->timestamp >= te->timestamp) {
+		} else if (fe->timestamp > te->timestamp ||
+				(fe->timestamp == te->timestamp &&
+				 !has_same_owners(fe, te))) {
 			trans_entry_fill_from(peer_tft->entries + peer_tft->n,
 					      fe);
 			peer_tft->entries[peer_tft->n].op_type = FILE_MODIFY;
@@ -530,5 +532,6 @@ void server_start()
 				receiver_task, (void *)connfd);
 	}
 
+	file_table_destroy(&ft);
 	return;
 }

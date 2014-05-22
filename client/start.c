@@ -447,6 +447,7 @@ static void client_cleanup()
 	pthread_cancel(file_monitor_tid);
 	pthread_cancel(keep_alive_tid);
 	pthread_cancel(ttop_receiver_tid);
+	file_table_destroy(&ft);
 	exit(0);
 }
 
