@@ -13,6 +13,7 @@ struct server_thread_arg {
 	int		conn;
 	pthread_t	tid;
 	struct peer_id	peerid;	/* peer ip and peer port */
+	void		*data;
 };
 
 void server_start();

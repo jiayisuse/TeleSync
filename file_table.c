@@ -67,6 +67,7 @@ inline void file_entry_add(struct file_table *table, struct file_entry *fe)
 		return;
 
 	hash_add(table->file_htable, &fe->hlist, ELFhash(fe->name));
+	table->n++;
 }
 
 void file_entry_fill_from(struct file_entry *fe, struct trans_file_entry *te)
@@ -122,12 +123,16 @@ int file_entry_update(struct file_entry *fe, struct trans_file_entry *te)
 	return 0;
 }
 
-inline void file_entry_delete(struct file_entry *fe)
+inline void file_entry_delete(struct file_table *table, struct file_entry *fe)
 {
-	if (fe == NULL)
+	if (table == NULL || fe == NULL)
 		return;
+
+	peer_id_list_destroy(&fe->owner_head);
 	hash_del(&fe->hlist);
 	free(fe);
+
+	table->n--;
 }
 
 /**
@@ -228,10 +233,61 @@ int file_table_delete(struct file_table *table, struct trans_file_entry *te)
 	if (fe == NULL)
 		_error("file '%s' does not exist!\n", te->name);
 	else {
-		file_entry_delete(fe);
+		file_entry_delete(table, fe);
 		ret = 0;
 	}
 	pthread_mutex_unlock(&table->mutex);
 
 	return ret;
+}
+
+void file_table_destroy(struct file_table *table)
+{
+	struct file_entry *fe;
+	struct hlist_node *tmp;
+	int i;
+
+	pthread_mutex_lock(&table->mutex);
+	hash_for_each_safe(table->file_htable, i, tmp, fe, hlist) {
+		if (fe == NULL)
+			continue;
+		file_entry_delete(table, fe);
+	}
+	pthread_mutex_unlock(&table->mutex);
+}
+
+void file_table_print(struct file_table *table)
+{
+	struct file_entry *fe;
+	int i;
+
+	printf("\n");
+	_debug("-------- File Table -------\n");
+	pthread_mutex_lock(&table->mutex);
+	hash_for_each(table->file_htable, i, fe, hlist) {
+		if (fe == NULL)
+			continue;
+		_debug("%-60s %lu\n", fe->name, fe->timestamp);
+	}
+	pthread_mutex_unlock(&table->mutex);
+	_debug("----------- END ----------\n\n");
+}
+
+void trans_table_fill_from(struct trans_file_table *tft, struct file_table *ft)
+{
+	struct file_entry *fe;
+	int i;
+
+	if (tft == NULL || ft == NULL)
+		return;
+
+	bzero(tft, sizeof(struct trans_file_table));
+	pthread_mutex_lock(&ft->mutex);
+	hash_for_each(ft->file_htable, i, fe, hlist) {
+		if (fe == NULL)
+			continue;
+		trans_entry_fill_from(tft->entries + tft->n, fe);
+		tft->n++;
+	}
+	pthread_mutex_unlock(&ft->mutex);
 }

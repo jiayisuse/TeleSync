@@ -21,13 +21,26 @@
 #include "file_monitor.h"
 
 
+extern uint32_t my_ip;
 
 static struct monitor_table m_table;
 static struct ptot_packet pkt;
 static struct trans_file_table file_table;
 
 
-inline static int get_timestamp(struct trans_file_entry *file_e, char *name)
+inline static int get_trans_timestamp(struct trans_file_entry *file_e, char *name)
+{
+	struct stat st;
+	if (stat(name, &st) < 0) {
+		perror("stat error");
+		return -1;
+	} else {
+		file_e->timestamp = st.st_mtime;
+		return 0;
+	}
+}
+
+inline static int get_file_timestamp(struct file_entry *file_e, char *name)
 {
 	struct stat st;
 	if (stat(name, &st) < 0) {
@@ -42,7 +55,7 @@ inline static int get_timestamp(struct trans_file_entry *file_e, char *name)
 static inline void unwatch_and_free_target(struct monitor_table *table,
 					   struct monitor_target *target)
 {
-	_debug("{ Un-Watching } '%s(%d)'\n", target->name, target->wd);
+	_debug("{ Un-Watching } '%s(%d)'\n", target->logic_name, target->wd);
 	table->targets[target->wd] = NULL;
 	inotify_rm_watch(table->fd, target->wd);
 	list_del(&target->l);
@@ -62,7 +75,7 @@ static void unwatch_and_free_targets(struct monitor_table *table)
 }
 
 static int watch_target_add(struct monitor_table *table,
-			    char *name, char *local_name)
+			    char *sys_name, char *logic_name)
 {
 	struct monitor_target *target;
 
@@ -72,14 +85,14 @@ static int watch_target_add(struct monitor_table *table,
 		return -1;
 	}
 
-	target->wd = inotify_add_watch(table->fd, name, DEFAULT_WATCH_MASK);
+	target->wd = inotify_add_watch(table->fd, sys_name, DEFAULT_WATCH_MASK);
 	if (target->wd < 0) {
-		_debug("inotify_add_watch error for '%s'\n", name);
+		_debug("inotify_add_watch error for '%s'\n", sys_name);
 		free(target);
 		return -1;
 	}
-	strcpy(target->name, name);
-	strcpy(target->local_name, local_name);
+	strcpy(target->sys_name, sys_name);
+	strcpy(target->logic_name, logic_name);
 	INIT_LIST_ELM(&target->l);
 
 	/* add target to target table */
@@ -87,7 +100,7 @@ static int watch_target_add(struct monitor_table *table,
 	list_add_tail(&table->head, &target->l);
 	table->n++;
 
-	_debug("{ Monitoring } '%s(%d)'\n", target->name, target->wd);
+	_debug("{ Monitoring } '%s(%d)'\n", target->logic_name, target->wd);
 
 	return 0;
 }
@@ -129,9 +142,9 @@ static int watch_target_add_dir(struct monitor_table *table,
 
 static int handle_event(struct inotify_event *event,
 			struct trans_file_entry *file_e,
-			char *file_name)
+			char *logic_name)
 {
-	char *target_name = m_table.targets[event->wd]->name;
+	char *target_name = m_table.targets[event->wd]->sys_name;
 	int ret = 0;
 
 	file_e->file_type = event->mask & IN_ISDIR ? DIRECTORY : REGULAR;
@@ -166,10 +179,10 @@ static int handle_event(struct inotify_event *event,
 	}
 
 	if (file_e->op_type == FILE_ADD && file_e->file_type == DIRECTORY)
-		ret = watch_target_add(&m_table, file_name, file_e->name);
+		ret = watch_target_add(&m_table, logic_name, file_e->name);
 
 	if (file_e->op_type != FILE_DELETE && file_e->op_type != FILE_NONE) {
-		ret = get_timestamp(file_e, file_name);
+		ret = get_trans_timestamp(file_e, logic_name);
 		if (ret < 0)
 			_debug("Get timestamp for '%s' failed, skip\n",
 					file_e->name);
@@ -194,23 +207,93 @@ static void print_file_table()
 }
 */
 
+static int add_me_to_peer_id_list(struct list_head *head)
+{
+	struct peer_id_list *p = calloc(1, sizeof(struct peer_id_list));
+	if (p == NULL) {
+		_error("peer id list alloc failed\n");
+		return -1;
+	}
+	p->ip = my_ip;
+	/* TODO: allocate p2p port dynamically */
+	p->port = P2P_PORT;
+	INIT_LIST_ELM(&p->l);
+	list_add(head, &p->l);
+	return 0;
+}
+
+static int get_file_table_r(struct file_table *ft, char *sys_name, char *logic_name)
+{
+	DIR *root;
+	struct dirent *d;
+	int ret = 0;
+
+	if ((root = opendir(sys_name)) == NULL) {
+		_error("target '%s' open failed\n", sys_name);
+		return -1;
+	}
+
+	while ((d = readdir(root)) != NULL) {
+		char new_sys_name[MAX_NAME_LEN];
+		struct file_entry *fe = file_entry_alloc();
+		if (fe == NULL) {
+			_error("file entry alloc failed\n");
+			return -1;
+		}
+
+		if (strcmp(d->d_name, ".") != 0 &&
+				strcmp(d->d_name, "..") != 0) {
+			sprintf(fe->name, "%s/%s", logic_name, d->d_name);
+			sprintf(new_sys_name, "%s/%s", sys_name, d->d_name);
+			get_file_timestamp(fe, sys_name);
+			add_me_to_peer_id_list(&fe->owner_head);
+			file_entry_add(ft, fe);
+		}
+
+		if (d->d_type == DT_DIR) {
+			fe->type = DIRECTORY;
+			if (strcmp(d->d_name, ".") == 0 ||
+					strcmp(d->d_name, "..") == 0)
+				continue;
+			ret = get_file_table_r(ft, new_sys_name, fe->name) || ret;
+		} else
+			fe->type = REGULAR;
+	}
+
+	return ret;
+}
+
+int get_file_table(struct file_table *ft, char **target, int n)
+{
+	int i;
+	char logic_name[MAX_NAME_LEN];
+
+	for (i = 0; i < n; i++) {
+		sprintf(logic_name, "%d", i + 1);
+		if (get_file_table_r(ft, target[i], logic_name) < 0)
+			return -1;
+	}
+
+	return 0;
+}
+
 /**
  * tell inotify not monitor add and modify operations.
  * You MUST call it just before creating a new file
  * @return: the monitor target, which should be used to call
  *          file_monitor_unblock() later
  */
-struct monitor_target *file_monitor_block(char *file_name)
+struct monitor_target *file_monitor_block(char *logic_name)
 {
 	struct list_head *pos;
-	char *index = rindex(file_name, '/');
+	char *index = rindex(logic_name, '/');
 
 	*index = '\0';
 	list_for_each(pos, &m_table.head) {
 		struct monitor_target *t = list_entry(pos,
 					struct monitor_target, l);
-		if (strcmp(t->name, file_name) == 0) {
-			t->wd = inotify_add_watch(m_table.fd, t->name,
+		if (strcmp(t->logic_name, logic_name) == 0) {
+			t->wd = inotify_add_watch(m_table.fd, t->sys_name,
 					BLOCK_CREATE_MAST);
 			*index = '/';
 			return t;
@@ -232,8 +315,31 @@ inline void file_monitor_unblock(struct monitor_target *target)
 	if (target == NULL)
 		return;
 
-	target->wd = inotify_add_watch(m_table.fd, target->name,
+	target->wd = inotify_add_watch(m_table.fd, target->sys_name,
 			DEFAULT_WATCH_MASK);
+}
+
+/**
+ * get sys name from the logic name
+ * You MUST call it when you are going to operate file system
+ * @target: the monitor target pointer returned by
+ *          file_monitor_block()
+ * @return: the sys name, which MUST be freed after using it
+ */
+char *get_sys_name(char *logic_name, struct monitor_target *target)
+{
+	char *sys_name;
+	char *file = rindex(logic_name, '/');
+
+	sys_name = calloc(1, MAX_NAME_LEN);
+	if (sys_name == NULL) {
+		_error("sys name alloc failed\n");
+		return NULL;
+	}
+
+	sprintf(sys_name, "%s%s", target->sys_name, file);
+
+	return sys_name;
 }
 
 void *file_monitor_task(void *arg)
@@ -282,7 +388,7 @@ void *file_monitor_task(void *arg)
 		for (offset = 0;
 		     offset < len && file_table.n < MAX_FILE_ENTRIES;
 		     offset += EVENT_LEN + event->len, file_table.n++) {
-			char *dir, *local_dir, new_name[MAX_NAME_LEN];
+			char *sys_dir, *logic_dir, new_name[MAX_NAME_LEN];
 			struct trans_file_entry *file_e =
 				file_table.entries + file_table.n;
 
@@ -291,14 +397,15 @@ void *file_monitor_task(void *arg)
 				file_table.n--;
 				continue;
 			}
-			local_dir = m_table.targets[event->wd]->local_name;
-			dir = m_table.targets[event->wd]->name;
+			logic_dir = m_table.targets[event->wd]->logic_name;
+			sys_dir = m_table.targets[event->wd]->sys_name;
 			if (event->len) {
 				sprintf(file_e->name, "%s/%s",
-						local_dir, event->name);
-				sprintf(new_name, "%s/%s", dir, event->name);
+						logic_dir, event->name);
+				sprintf(new_name, "%s/%s",
+						sys_dir, event->name);
 			} else {
-				strcpy(file_e->name, local_dir);
+				strcpy(file_e->name, logic_dir);
 				strcpy(new_name, event->name);
 			}
 

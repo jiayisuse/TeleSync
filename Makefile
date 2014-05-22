@@ -1,8 +1,8 @@
 target = dartsync
 common_headers = include/*.h include/utility/*.h
-server_objs = server/start.o server/packet.o server/file_table.o server/peer_table.o
+server_objs = server/start.o server/packet.o server/peer_table.o
 client_objs = client/start.o client/file_monitor.o client/packet.o
-utility_objs = utility/segment.o utility/list.o utility/pthread_wait.o
+utility_objs = file_table.o utility/segment.o utility/list.o utility/pthread_wait.o
 objects = dartsync.o $(server_objs) $(client_objs) $(utility_objs)
 
 CFLAGS += -Wall

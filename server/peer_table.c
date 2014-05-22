@@ -70,18 +70,18 @@ int peer_table_add(struct peer_table *pt, struct peer_entry *pe)
  * @entry: peer_table_entry
  * return 1 if success, -1 otherwise
  */
-int peer_table_delete(struct peer_table *pt, struct peer_id *id)
+int peer_table_delete(struct peer_table *pt, int conn)
 {
 	struct list_head *pos;
 	int ret = -1;
 
-	if (pt == NULL || id == NULL)
+	if (pt == NULL)
 		return ret;
 
 	pthread_mutex_lock(&pt->mutex);
 	list_for_each(pos, &pt->peer_head) {
 		struct peer_entry *pe = list_entry(pos, struct peer_entry, l);
-		if (memcmp(pe, id, sizeof(struct peer_id)) == 0) {
+		if (pe->conn == conn) {
 			list_del(&pe->l);
 			free(pe);
 			pt->peer_num--;

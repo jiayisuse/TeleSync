@@ -28,7 +28,7 @@ struct peer_entry *peer_entry_alloc();
 
 void peer_table_init(struct peer_table *pt);
 int peer_table_add(struct peer_table *pt, struct peer_entry *pe);
-int peer_table_delete(struct peer_table *pt, struct peer_id *id);
+int peer_table_delete(struct peer_table *pt, int conn);
 struct peer_entry *peer_table_find(struct peer_table *pt, uint32_t ip);
 void peer_table_print(struct peer_table *pt);
 
