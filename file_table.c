@@ -1,5 +1,4 @@
 #include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
 #include <pthread.h>
 
@@ -14,7 +13,8 @@
  * @te: the trans_file_entry in which the owners would be added to
  *      the new list
  */
-void peer_id_list_add(struct list_head *owner_h, struct trans_file_entry *te)
+static void __peer_id_list_add(struct list_head *owner_h,
+			     struct trans_file_entry *te)
 {
 	int i;
 
@@ -38,7 +38,7 @@ void peer_id_list_add(struct list_head *owner_h, struct trans_file_entry *te)
  * unlink and free all the owners in the linked list
  * @head: the linked list head that points to all the woners
  */
-inline void peer_id_list_destroy(struct list_head *head)
+static inline void __peer_id_list_destroy(struct list_head *head)
 {
 	struct list_head *pos, *tmp;
 
@@ -51,6 +51,22 @@ inline void peer_id_list_destroy(struct list_head *head)
 		free(p);
 	}
 }
+
+static inline void __peer_id_list_replace(struct file_entry *fe,
+					  struct trans_file_entry *te)
+{
+	__peer_id_list_destroy(&fe->owner_head);
+	__peer_id_list_add(&fe->owner_head, te);
+}
+
+inline void peer_id_list_replace(struct file_entry *fe,
+			  	 struct trans_file_entry *te)
+{
+	pthread_rwlock_wrlock(&fe->rwlock);
+	__peer_id_list_replace(fe, te);
+	pthread_rwlock_unlock(&fe->rwlock);
+}
+
 
 /**
  * file entry operations
@@ -66,6 +82,7 @@ struct file_entry *file_entry_alloc()
 		return NULL;
 	INIT_LIST_HEAD(&fe->owner_head);
 	INIT_HLIST_NODE(&fe->hlist);
+	pthread_rwlock_init(&fe->rwlock, NULL);
 
 	return fe;
 }
@@ -81,7 +98,9 @@ inline void file_entry_add(struct file_table *table, struct file_entry *fe)
 	if (table == NULL || fe == NULL)
 		return;
 
+	pthread_rwlock_wrlock(&fe->rwlock);
 	hash_add(table->file_htable, &fe->hlist, ELFhash(fe->name));
+	pthread_rwlock_unlock(&fe->rwlock);
 	table->n++;
 }
 
@@ -95,10 +114,12 @@ void file_entry_fill_from(struct file_entry *fe, struct trans_file_entry *te)
 	if (fe == NULL || te == NULL)
 		return;
 
+	pthread_rwlock_wrlock(&fe->rwlock);
 	strcpy(fe->name, te->name);
 	fe->timestamp = te->timestamp;
 	fe->type = te->file_type;
-	peer_id_list_add(&fe->owner_head, te);
+	__peer_id_list_add(&fe->owner_head, te);
+	pthread_rwlock_unlock(&fe->rwlock);
 }
 
 /**
@@ -113,6 +134,7 @@ void trans_entry_fill_from(struct trans_file_entry *te, struct file_entry *fe)
 	if (te == NULL || fe == NULL)
 		return;
 
+	pthread_rwlock_rdlock(&fe->rwlock);
 	bzero(te, sizeof(struct trans_file_entry));
 	strcpy(te->name, fe->name);
 	te->timestamp = fe->timestamp;
@@ -123,6 +145,7 @@ void trans_entry_fill_from(struct trans_file_entry *te, struct file_entry *fe)
 		te->owners[te->owner_n].port = p->port;
 		te->owner_n++;
 	}
+	pthread_rwlock_unlock(&fe->rwlock);
 }
 
 /**
@@ -133,17 +156,20 @@ void trans_entry_fill_from(struct trans_file_entry *te, struct file_entry *fe)
  */
 int file_entry_update(struct file_entry *fe, struct trans_file_entry *te)
 {
+	int ret = 0;
+
 	if (fe == NULL || te == NULL)
 		return -1;
 
+	pthread_rwlock_wrlock(&fe->rwlock);
 	if (te->timestamp > fe->timestamp) {
 		fe->timestamp = te->timestamp;
-		peer_id_list_destroy(&fe->owner_head);
-		peer_id_list_add(&fe->owner_head, te);
+		__peer_id_list_replace(fe, te);
 	} else if (te->timestamp == fe->timestamp)
-		peer_id_list_add(&fe->owner_head, te);
+		__peer_id_list_add(&fe->owner_head, te);
 	else
-		return -1;
+		ret = -1;
+	pthread_rwlock_unlock(&fe->rwlock);
 
 	return 0;
 }
@@ -158,8 +184,11 @@ inline void file_entry_delete(struct file_table *table, struct file_entry *fe)
 	if (table == NULL || fe == NULL)
 		return;
 
-	peer_id_list_destroy(&fe->owner_head);
+	pthread_rwlock_wrlock(&fe->rwlock);
+	__peer_id_list_destroy(&fe->owner_head);
 	hash_del(&fe->hlist);
+	pthread_rwlock_unlock(&fe->rwlock);
+	pthread_rwlock_destroy(&fe->rwlock);
 	free(fe);
 
 	table->n--;

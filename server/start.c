@@ -106,7 +106,8 @@ void *peer_check_alive_task(void *arg)
 
 		pe = peer_table_find(&pt, ip);
 		if (pe == NULL) {
-			_debug("peer entry (ip:%u) doesn't exist\n", ip);
+			_debug("peer entry (ip:%s) doesn't exist\n",
+					ip_string(ip));
 			pthread_cancel(receiver_tid);
 			pthread_exit(NULL);
 		}

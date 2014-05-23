@@ -256,12 +256,10 @@ static void file_table_sync(struct file_table *ft, struct trans_file_table *tft)
 	for (i = 0; i < tft->n; i++) {
 		struct trans_file_entry *te = tft->entries + i;
 		fe = file_table_find(ft, te);
-		if (fe == NULL) {
+		if (fe == NULL)
 			fe = file_table_add(ft, te);
-		} else {
-			peer_id_list_destroy(&fe->owner_head);
-			peer_id_list_add(&fe->owner_head, te);
-		}
+		else
+			peer_id_list_replace(fe, te);
 		pthread_create(&new_tid, NULL, ptop_download_task, fe);
 	}
 }
@@ -361,7 +359,7 @@ void *broadcast_entry_handler_task(void *arg)
 
 	if (te == NULL) {
 		_error("trans_file_entry is NULL\n");
-		pthread_exit((void *)0);
+		pthread_exit((void *)-1);
 	}
 
 	switch (te->op_type) {
@@ -370,8 +368,7 @@ void *broadcast_entry_handler_task(void *arg)
 		/* for now, assume there's no confliction */
 		fe = file_table_find(&ft, te);
 		if (fe != NULL) {
-			peer_id_list_destroy(&fe->owner_head);
-			peer_id_list_add(&fe->owner_head, te);
+			peer_id_list_replace(fe, te);
 			if (te->timestamp > fe->timestamp) {
 				/* create a file add task to download the file */
 				pthread_create(&new_tid, NULL,
@@ -381,7 +378,7 @@ void *broadcast_entry_handler_task(void *arg)
 			}
 		} else {
 			fe = file_table_add(&ft, te);
-			if(fe == NULL)
+			if (fe == NULL)
 				_error("\tfail to add file entry\n");
 			update_flag = 1;
 			op_type = FILE_ADD;
@@ -409,12 +406,10 @@ void *broadcast_entry_handler_task(void *arg)
 			fe = file_table_add(&ft, te);
 			update_flag = 1;
 			op_type = FILE_MODIFY;
-
 			/* create a file add task to download the file */
 			pthread_create(&new_tid, NULL, ptop_download_task, fe);
 		} else {
-			peer_id_list_destroy(&fe->owner_head);
-			peer_id_list_add(&fe->owner_head, te);
+			peer_id_list_replace(fe, te);
 			if (te->timestamp > fe->timestamp) {
 				/* create a file add task to download the file */
 				pthread_create(&new_tid, NULL,
