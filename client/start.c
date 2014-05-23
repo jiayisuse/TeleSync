@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <netdb.h>
 #include <sys/time.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <netinet/in.h>
@@ -162,25 +164,31 @@ static int register_to_tracker(int conn)
  * peer delete a file from file system
  * @logic_name: the logic name of the file
  */
-static void file_delete(char *logic_name)
+static void file_delete(struct trans_file_entry *te)
 {
 	char *file_sys_name;
 	struct monitor_target *target;
 
-	if (logic_name == NULL)
+	if (te == NULL)
 		return;
 	
-	target = file_monitor_block(logic_name);
+	target = file_monitor_block(te->name);
 	if (target == NULL) {
-		_error("Could NOT find the target with '%s'\n", logic_name);
+		_error("Could NOT find the target with '%s'\n", te->name);
 		return;
 	}
-	file_sys_name = get_sys_name(logic_name, target);
+	file_sys_name = get_sys_name(te->name, target);
 	if (file_sys_name == NULL) {
-		_error("Could NOT find sys name for '%s'\n", logic_name);
+		_error("Could NOT find sys name for '%s'\n", te->name);
 		goto out;
 	}
-	unlink(file_sys_name);
+
+	if (te->file_type == DIRECTORY) {
+		/* TODO: rm directory */
+	} else
+		unlink(file_sys_name);
+
+	free(file_sys_name);
 out:
 	file_monitor_unblock(target);
 }
@@ -194,7 +202,7 @@ static void *ptop_download_task(void *arg)
 {
 	struct file_entry *fe = arg;
 	char *logic_name = fe->name;
-	char *file_sys_name;
+	char *sys_name;
 	struct monitor_target *target;
 	long int ret = 0;
 
@@ -207,8 +215,8 @@ static void *ptop_download_task(void *arg)
 	}
 
 	/* get file's sys name */
-	file_sys_name = get_sys_name(logic_name, target);
-	if (file_sys_name == NULL) {
+	sys_name = get_sys_name(logic_name, target);
+	if (sys_name == NULL) {
 		_error("Could NOT find sys name for '%s'\n", logic_name);
 		ret = -1;
 		goto unblock_file_monitor;
@@ -216,18 +224,20 @@ static void *ptop_download_task(void *arg)
 
 	/* TODO: to uncomment the unlink(), please make sure your
 	         download function works well */
-	/* unlink(file_sys_name); */
+	/* unlink(sys_name); */
+	if (fe->type == DIRECTORY) {
+		file_monitor_mkdir(sys_name, logic_name);
+		file_change_modtime(sys_name, fe->timestamp);
+	} else {
+		/* TODO: start your download work here */
+	}
 
-	_debug("download... %s\n", file_sys_name);
 
-	/* TODO: start your download work here */
-
-
-
+free_sys_name:
+	free(sys_name);
 unblock_file_monitor:
 	file_monitor_unblock(target);
 out:
-	_leave();
 	pthread_exit((void *)0);
 }
 
@@ -390,11 +400,12 @@ void *broadcast_entry_handler_task(void *arg)
 
 	case FILE_DELETE:
 		_debug("{ FILE_DELETE } '%s'\n", te->name);
+
 		if (file_table_delete(&ft, te) < 0)
 			_error("\tfail to delete file entry\n");
 
 		/* delete the file */
-		file_delete(te->name);
+		file_delete(te);
 
 		break;
 

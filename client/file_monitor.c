@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <utime.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -75,26 +76,33 @@ static void unwatch_and_free_targets(struct monitor_table *table)
 	bzero(table, sizeof(struct monitor_table));
 }
 
-static int watch_target_add(struct monitor_table *table,
-			    char *sys_name, char *logic_name)
+static struct monitor_target *watch_target_add(struct monitor_table *table,
+					       const char *sys_name,
+					       const char *logic_name)
 {
 	struct monitor_target *target;
+	int wd;
+
+	wd = inotify_add_watch(table->fd, sys_name, DEFAULT_WATCH_MASK);
+	if (wd < 0) {
+		_debug("inotify_add_watch error for '%s'\n", sys_name);
+		return NULL;
+	}
+
+	if (table->targets[wd] != NULL)
+		return table->targets[wd];
 
 	target = calloc(1, sizeof(*target));
 	if (target == NULL) {
 		_error("calloc monitor target failed\n");
-		return -1;
+		return NULL;
 	}
 
-	target->wd = inotify_add_watch(table->fd, sys_name, DEFAULT_WATCH_MASK);
-	if (target->wd < 0) {
-		_debug("inotify_add_watch error for '%s'\n", sys_name);
-		free(target);
-		return -1;
-	}
 	strcpy(target->sys_name, sys_name);
 	strcpy(target->logic_name, logic_name);
 	INIT_LIST_ELM(&target->l);
+	pthread_mutex_init(&target->mutex, NULL);
+	target->wd = wd;
 
 	/* add target to target table */
 	table->targets[target->wd] = target;
@@ -103,7 +111,7 @@ static int watch_target_add(struct monitor_table *table,
 
 	_debug("{ Monitoring } '%s(%d)'\n", target->logic_name, target->wd);
 
-	return 0;
+	return target;
 }
 
 static int watch_target_add_dir(struct monitor_table *table,
@@ -143,7 +151,7 @@ static int watch_target_add_dir(struct monitor_table *table,
 
 static int handle_event(struct inotify_event *event,
 			struct trans_file_entry *te,
-			char *logic_name)
+			char *sys_name)
 {
 	char *target_name = m_table.targets[event->wd]->sys_name;
 	int ret = 0;
@@ -180,10 +188,10 @@ static int handle_event(struct inotify_event *event,
 	}
 
 	if (te->op_type == FILE_ADD && te->file_type == DIRECTORY)
-		ret = watch_target_add(&m_table, logic_name, te->name);
+		watch_target_add(&m_table, sys_name, te->name);
 
 	if (te->op_type != FILE_DELETE && te->op_type != FILE_NONE) {
-		ret = get_trans_timestamp(te, logic_name);
+		ret = get_trans_timestamp(te, sys_name);
 		if (ret < 0)
 			_debug("Get timestamp for '%s' failed, skip\n",
 					te->name);
@@ -297,8 +305,26 @@ int get_file_table(struct file_table *ft, char **target, int n)
 	return 0;
 }
 
+static inline void __file_monitor_block(struct monitor_target *t)
+{
+	if (t == NULL)
+		return;
+
+	t->wd = inotify_add_watch(m_table.fd, t->sys_name, BLOCK_CREATE_MAST);
+}
+
+static inline void __file_monitor_unblock(struct monitor_target *target)
+{
+	if (target == NULL)
+		return;
+
+	target->wd = inotify_add_watch(m_table.fd, target->sys_name,
+			DEFAULT_WATCH_MASK);
+}
+
 /**
- * tell inotify not monitor add and modify operations.
+ * tell inotify not monitor add and modify operations. if no
+ * monitor target found, it will create it.
  * You MUST call it just before creating a new file
  * @return: the monitor target, which should be used to call
  *          file_monitor_unblock() later
@@ -306,22 +332,64 @@ int get_file_table(struct file_table *ft, char **target, int n)
 struct monitor_target *file_monitor_block(char *logic_name)
 {
 	struct list_head *pos;
-	char *index = rindex(logic_name, '/');
+	char *last_i = rindex(logic_name, '/');
+	char *first_i = index(logic_name, '/');
+	char *p;
+	char sys_dir[MAX_NAME_LEN], logic_dir[MAX_NAME_LEN];
+	struct monitor_target *t;
 
-	*index = '\0';
+	pthread_mutex_lock(&m_table.mutex);
+
+	*last_i = '\0';
 	list_for_each(pos, &m_table.head) {
-		struct monitor_target *t = list_entry(pos,
-					struct monitor_target, l);
+		t= list_entry(pos, struct monitor_target, l);
 		if (strcmp(t->logic_name, logic_name) == 0) {
 			t->wd = inotify_add_watch(m_table.fd, t->sys_name,
 					BLOCK_CREATE_MAST);
-			*index = '/';
-			return t;
+			*last_i = '/';
+			pthread_mutex_unlock(&m_table.mutex);
+			goto out;
 		}
 	}
+	*last_i = '/';
 
-	*index = '/';
-	return NULL;
+	/* no target found, we need to create the new dir and
+	   watch it */
+	for ( ; first_i != last_i; first_i = index(first_i + 1, '/')) {
+		*first_i = '\0';
+		list_for_each(pos, &m_table.head) {
+			struct monitor_target *tmp =
+				list_entry(pos, struct monitor_target, l);
+			if (strcmp(tmp->logic_name, logic_name) == 0) {
+				t = tmp;
+				break;
+			}
+		}
+		*first_i = '/';
+	}
+	
+	for (p = logic_name + strlen(t->logic_name) + 1, first_i = index(p, '/');
+			first_i != NULL;
+			p = first_i + 1, first_i = index(first_i + 1, '/')) {
+		*first_i = '\0';
+		sprintf(sys_dir, "%s/%s", t->sys_name, p);
+		sprintf(logic_dir, "%s/%s", t->logic_name, p);
+
+		__file_monitor_block(t);
+		mkdir(sys_dir, S_IRWXU);
+		__file_monitor_unblock(t);
+		t = watch_target_add(&m_table, sys_dir, logic_dir);
+
+		*first_i = '/';
+	}
+	pthread_mutex_unlock(&m_table.mutex);
+
+	__file_monitor_block(t);
+	pthread_mutex_lock(&t->mutex);
+
+out:
+	_leave();
+	return t;
 }
 
 /**
@@ -337,6 +405,7 @@ inline void file_monitor_unblock(struct monitor_target *target)
 
 	target->wd = inotify_add_watch(m_table.fd, target->sys_name,
 			DEFAULT_WATCH_MASK);
+	pthread_mutex_unlock(&target->mutex);
 }
 
 /**
@@ -362,6 +431,30 @@ char *get_sys_name(char *logic_name, struct monitor_target *target)
 	return sys_name;
 }
 
+/**
+ * make a new directory and add this directory to file monitor list
+ * @sys_name: the directory name in file system
+ */
+void file_monitor_mkdir(const char *sys_name, const char *logic_name)
+{
+	mkdir(sys_name, S_IRWXU);
+	pthread_mutex_lock(&m_table.mutex);
+	watch_target_add(&m_table, sys_name, logic_name);
+	pthread_mutex_unlock(&m_table.mutex);
+}
+
+/**
+ * set the file's modify time to a certain modtime, as well as
+ * the access time
+ * @modtime: the modify timestamp would the file be set to
+ */
+inline void file_change_modtime(const char *sys_name, uint64_t modtime)
+{
+	struct utimbuf timbuf;
+	timbuf.actime = timbuf.modtime = modtime;
+	utime(sys_name, &timbuf);
+}
+
 void *file_monitor_task(void *arg)
 {
 	struct client_thread_arg *targ = arg;
@@ -378,6 +471,7 @@ void *file_monitor_task(void *arg)
 
 	bzero(&m_table, sizeof(struct monitor_table));
 	INIT_LIST_HEAD(&m_table.head);
+	pthread_mutex_init(&m_table.mutex, NULL);
 	m_table.fd = inotify_init();
 	if (m_table.fd < 0) {
 		_error("inotify_init failed\n");
