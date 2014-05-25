@@ -10,6 +10,7 @@
 #define MAX_PKT_DATA_LEN	(2 << 15)
 #define MAX_CONNECTIONS		1024
 #define CHECK_ALIVE_DIFF	10000	/* check alive different micro sec */
+#define MAX_PIECES		1024
 
 #define TRACKER_RECEIVER_PORT	4092
 #define P2P_PORT		4192

@@ -15,6 +15,7 @@ void ptot_packet_init(struct ptot_packet *pkt, enum ptot_packet_type type)
 {
 	if (pkt == NULL)
 		return;
+
 	bzero(pkt, sizeof(struct ptot_packet));
 	pkt->hdr.type = type;
 	pkt->hdr.ip = my_ip;
@@ -90,4 +91,35 @@ int client_tcp_listen(uint16_t port)
 	listen(listenfd, MAX_CONNECTIONS);
 
 	return listenfd;
+}
+
+
+inline void p2p_packet_init(struct p2p_packet *pkt, enum p2p_packet_type type)
+{
+	bzero(pkt, sizeof(struct p2p_packet));
+	pkt->type = type;
+}
+
+inline void p2p_packet_fill(struct p2p_packet *pkt, void *buf, int len)
+{
+	pkt->data_len = len;
+	memcpy(pkt->data, buf, len);
+}
+
+inline int send_p2p_packet(int conn, struct p2p_packet *pkt)
+{
+	return send_segment(conn, (char *)pkt, p2p_packet_len(pkt));
+}
+
+inline int recv_p2p_packet(int conn, struct p2p_packet *pkt)
+{
+	int ret = -1;
+	char buf[sizeof(struct p2p_packet) + 2] = { 0 };
+
+	ret = recv_segment(conn, buf, sizeof(buf));
+	if (ret < 0)
+		return -1;
+	memcpy(pkt, buf, sizeof(struct ttop_packet));
+
+	return ret;
 }

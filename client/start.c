@@ -22,15 +22,16 @@
 #include "start.h"
 #include "packet.h"
 #include "file_monitor.h"
+#include "download.h"
 
 uint32_t my_ip;
 uint32_t serv_ip;
+struct ttop_control_info ctr_info;
 
 static pthread_t file_monitor_tid;
 static pthread_t keep_alive_tid;
 static pthread_t ttop_receiver_tid;
 static pthread_t ptop_listening_tid;
-static struct ttop_control_info ctr_info;
 static struct client_thread_arg targ;
 
 struct file_table ft;
@@ -229,11 +230,12 @@ static void *ptop_download_task(void *arg)
 		file_monitor_mkdir(sys_name, logic_name);
 		file_change_modtime(sys_name, fe->timestamp);
 	} else {
+		do_download(fe, sys_name);
+		file_change_modtime(sys_name, fe->timestamp);
 		/* TODO: start your download work here */
 	}
 
 
-free_sys_name:
 	free(sys_name);
 unblock_file_monitor:
 	file_monitor_unblock(target);
@@ -249,10 +251,24 @@ out:
 static void *ptop_upload_task(void *arg)
 {
 	long int p2p_conn = (long int)arg;
+	struct p2p_packet pkt;
 
 	/* TODO: start your upload work here */
+	while (recv_p2p_packet(p2p_conn, &pkt) > 0) {
+		switch (pkt.type) {
+		case P2P_FILE_LEN_REQ:
+			_debug("{ P2P_FILE_LEN_REQ }\n");
+			break;
+		case P2P_PORT_REQ:
+			_debug("{ P2P_PORT_REQ }\n");
+			break;
+		case P2P_PIECE_REQ:
+			_debug("{ P2P_PIECE_REQ }\n");
+			break;
+		}
+	}
 
-
+	close(p2p_conn);
 	pthread_exit((void *)0);
 }
 
@@ -266,11 +282,15 @@ static void file_table_sync(struct file_table *ft, struct trans_file_table *tft)
 	for (i = 0; i < tft->n; i++) {
 		struct trans_file_entry *te = tft->entries + i;
 		fe = file_table_find(ft, te);
-		if (fe == NULL)
+		if (fe == NULL) {
 			fe = file_table_add(ft, te);
-		else
+			pthread_create(&new_tid, NULL, ptop_download_task, fe);
+		} else {
 			peer_id_list_replace(fe, te);
-		pthread_create(&new_tid, NULL, ptop_download_task, fe);
+			if (te->timestamp > fe->timestamp)
+				pthread_create(&new_tid, NULL,
+						ptop_download_task, fe);
+		}
 	}
 }
 
@@ -313,7 +333,6 @@ static int sync_files(int conn, char **target, int n)
 		return -1;
 	}
 
-	/* TODO: sync file locally */
 	_debug("NEED TO SYNC FILE LOCALLY!!!\n");
 	memcpy(&tft, ttop_pkt.data, ttop_pkt.hdr.data_len);
 	file_table_sync(&ft, &tft);
