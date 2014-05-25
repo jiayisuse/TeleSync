@@ -14,10 +14,10 @@
 
 #include <consts.h>
 #include <packet_def.h>
+#include <file_table.h>
 #include <hash.h>
 #include <debug.h>
 #include "start.h"
-#include "file_table.h"
 #include "peer_table.h"
 #include "packet.h"
 
@@ -54,7 +54,9 @@ static int parse_conf_file(struct ttop_control_info *control)
 	return 0;
 }
 
-static void broadcast_update(struct peer_table *pt, struct trans_file_table *tft)
+static void broadcast_update(struct peer_table *pt,
+			     struct trans_file_table *tft,
+			     int exclusive_conn)
 {
 	struct list_head *pos;
 	struct ttop_packet pkt;
@@ -71,9 +73,10 @@ static void broadcast_update(struct peer_table *pt, struct trans_file_table *tft
 	/* send ACCEPT back to peer */
 	list_for_each(pos, &pt->peer_head) {
 		struct peer_entry *pe = list_entry(pos, struct peer_entry, l);
-		if (send_ttop_packet(pe->conn, &pkt) < 0)
-			_error("fail to send BROADCAST to peer(%u)\n",
-					pe->peerid.ip);
+		if (pe->conn != exclusive_conn)
+			if (send_ttop_packet(pe->conn, &pkt) < 0)
+				_error("fail to send BROADCAST to peer(%u)\n",
+						pe->peerid.ip);
 	}
 
 	_leave();
@@ -103,7 +106,8 @@ void *peer_check_alive_task(void *arg)
 
 		pe = peer_table_find(&pt, ip);
 		if (pe == NULL) {
-			_error("peer entry (ip:%u) doesn't exist\n", ip);
+			_debug("peer entry (ip:%s) doesn't exist\n",
+					ip_string(ip));
 			pthread_cancel(receiver_tid);
 			pthread_exit(NULL);
 		}
@@ -207,10 +211,113 @@ out:
 	pthread_exit((void *)ret);
 }
 
+
+static inline
+struct trans_file_entry *trans_file_search(struct trans_file_table *tft,
+					   const char *name)
+{
+	int i;
+
+	for (i = 0; i < tft->n; i++)
+		if (strcmp(tft->entries[i].name, name) == 0)
+			return tft->entries + i;
+	return NULL;
+}
+
+/**
+ * this thread sync the current file table with peer's file table
+ */
+static void *sync_task(void *arg)
+{
+	struct server_thread_arg *targ = arg;
+	struct trans_file_table *tft = targ->data;
+	int conn = targ->conn;
+	struct trans_file_table *broad_tft;
+	struct trans_file_table *peer_tft;
+	struct file_entry *fe;
+	struct ttop_packet *pkt;
+	long int i, ret = 0;
+
+	broad_tft = calloc(1, sizeof(struct trans_file_table));
+	if (broad_tft == NULL) {
+		_error("broad tft alloc failed\n");
+		ret = -1;
+		goto out;
+	}
+
+	peer_tft = calloc(1, sizeof(struct trans_file_table));
+	if (peer_tft == NULL) {
+		_error("peer tft alloc failed\n");
+		ret = -1;
+		goto free_broad_tft;
+	}
+
+	pkt = calloc(1, sizeof(struct ttop_packet));
+	if (pkt == NULL) {
+		_error("packet alloc failed\n");
+		ret = -1;
+		goto free_peer_tft;
+	}
+
+	/* update peer's file table */
+	hash_for_each(ft.file_htable, i, fe, hlist) {
+		struct trans_file_entry *te;
+		te = trans_file_search(tft, fe->name);
+		if (te == NULL) {
+			trans_entry_fill_from(peer_tft->entries + peer_tft->n,
+					      fe);
+			peer_tft->entries[peer_tft->n].op_type = FILE_ADD;
+			peer_tft->n++;
+		} else if (fe->timestamp > te->timestamp ||
+				(fe->timestamp == te->timestamp &&
+				 !has_same_owners(fe, te))) {
+			trans_entry_fill_from(peer_tft->entries + peer_tft->n,
+					      fe);
+			peer_tft->entries[peer_tft->n].op_type = FILE_MODIFY;
+			peer_tft->n++;
+		}
+	}
+	/* send updated file table back to the peer */
+	pkt->hdr.type = TRACKER_SYNC;
+	pkt->hdr.data_len = trans_table_len(peer_tft);
+	memcpy(pkt->data, peer_tft, pkt->hdr.data_len);
+	if (send_ttop_packet(conn, pkt) < 0)
+		_error("ttop packet send failed\n");
+
+	/* update self file table */
+	for (i = 0; i < tft->n; i++) {
+		struct trans_file_entry *te = tft->entries + i;
+		fe = file_table_find(&ft, te);
+		if (fe == NULL) {
+			file_table_add(&ft, te);
+			broad_tft->entries[broad_tft->n] = *te;
+			broad_tft->entries[broad_tft->n].op_type = FILE_ADD;
+			broad_tft->n++;
+		} else if (fe->timestamp < te->timestamp) {
+			file_table_update(&ft, te);
+			broad_tft->entries[broad_tft->n] = *te;
+			broad_tft->entries[broad_tft->n].op_type = FILE_MODIFY;
+			broad_tft->n++;
+		} else
+			file_table_update(&ft, te);
+	}
+	/* broadcast update to all peers */
+	broadcast_update(&pt, broad_tft, conn);
+
+	free(pkt);
+free_peer_tft:
+	free(peer_tft);
+free_broad_tft:
+	free(broad_tft);
+out:
+	free(tft);
+	pthread_exit((void *)ret);
+}
+
 /**
  * called when receivs PEER_FILE_UPDATE
  */
-void *peer_file_update_task(void *arg)
+static void *peer_file_update_task(void *arg)
 {
 	/* extracts the trans_file_table sent by receiver_handler_task thread */
 	struct trans_file_table *tft = (struct trans_file_table *)arg;
@@ -267,8 +374,7 @@ void *peer_file_update_task(void *arg)
 				op_type = FILE_MODIFY;
 			}
 
-			trans_entry_fill_from(new_tft.entries + new_tft.n,
-					fe);
+			trans_entry_fill_from(new_tft.entries + new_tft.n, fe);
 			new_tft.entries[new_tft.n].op_type = op_type;
 			new_tft.n++;
 
@@ -286,11 +392,17 @@ void *peer_file_update_task(void *arg)
 	/* after scanning the entire trans_file_table, check if need
 	   to broadcast the entire file table to all peers alive */
 	if (new_tft.n > 0)
-		broadcast_update(&pt, &new_tft);
+		broadcast_update(&pt, &new_tft, -1);
 
 	_leave();
 	free(tft);
 	pthread_exit((void *)0);
+}
+
+static void receiver_task_cleanup(void *arg)
+{
+	long int conn = (long int)arg;
+	peer_table_delete(&pt, conn);
 }
 
 static void *receiver_task(void *arg)
@@ -300,6 +412,8 @@ static void *receiver_task(void *arg)
 	struct ptot_packet pkt;
 
 	_enter();
+
+	pthread_cleanup_push(receiver_task_cleanup, (void *)conn);
 
 	while (recv_ptot_packet(conn, &pkt) > 0) {
 		pthread_t new_tid;
@@ -338,6 +452,23 @@ static void *receiver_task(void *arg)
 			break;
 		case PEER_SYNC:
 			_debug("[ PEER_SYNC from '%s']\n", ip_string(ip));
+			targ = calloc(1, sizeof(*targ));
+			if (targ == NULL) {
+				_error("targ alloc failed\n");
+				pthread_exit((void *)-1);
+			}
+			targ->conn = conn;
+
+			tft = calloc(1, sizeof(*tft));
+			if (tft == NULL) {
+				_error("trans file table alloc failed\n");
+				pthread_exit((void *)-1);
+			}
+			memcpy(tft, pkt.data, data_len);
+
+			targ->data = tft;
+			pthread_create(&new_tid, NULL,
+					sync_task, targ);
 			break;
 		case PEER_FILE_UPDATE:
 			_debug("[ PEER_FILE_UPDATE from '%s']\n", ip_string(ip));
@@ -360,8 +491,10 @@ static void *receiver_task(void *arg)
 		}
 	}
 
-	_leave();
+	pthread_cleanup_pop(0);
 
+	_leave();
+	peer_table_delete(&pt, conn);
 	pthread_exit((void *)0);
 }
 
@@ -400,5 +533,6 @@ void server_start()
 				receiver_task, (void *)connfd);
 	}
 
+	file_table_destroy(&ft);
 	return;
 }

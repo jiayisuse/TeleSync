@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <netdb.h>
 #include <sys/time.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <netinet/in.h>
@@ -16,17 +18,23 @@
 #include <debug.h>
 #include <consts.h>
 #include <packet_def.h>
+#include <file_table.h>
 #include "start.h"
 #include "packet.h"
 #include "file_monitor.h"
+#include "download.h"
 
 uint32_t my_ip;
 uint32_t serv_ip;
+struct ttop_control_info ctr_info;
 
 static pthread_t file_monitor_tid;
 static pthread_t keep_alive_tid;
-static pthread_t receiver_tid;
-static struct ttop_control_info ctr_info;
+static pthread_t ttop_receiver_tid;
+static pthread_t ptop_listening_tid;
+static struct client_thread_arg targ;
+
+struct file_table ft;
 
 
 static void get_my_ip(char *if_name)
@@ -131,7 +139,7 @@ static int connect_tracker()
 	return fd;
 }
 
-static inline int register_to_tracker(int conn)
+static int register_to_tracker(int conn)
 {
 	struct ptot_packet ptot_pkt;
 	struct ttop_packet ttop_pkt;
@@ -153,11 +161,318 @@ static inline int register_to_tracker(int conn)
 	return 0;
 }
 
+/**
+ * peer delete a file from file system
+ * @logic_name: the logic name of the file
+ */
+static void file_delete(struct trans_file_entry *te)
+{
+	char *file_sys_name;
+	struct monitor_target *target;
+
+	if (te == NULL)
+		return;
+	
+	target = file_monitor_block(te->name);
+	if (target == NULL) {
+		_error("Could NOT find the target with '%s'\n", te->name);
+		return;
+	}
+	file_sys_name = get_sys_name(te->name, target);
+	if (file_sys_name == NULL) {
+		_error("Could NOT find sys name for '%s'\n", te->name);
+		goto out;
+	}
+
+	if (te->file_type == DIRECTORY) {
+		/* TODO: rm directory */
+	} else
+		unlink(file_sys_name);
+
+	free(file_sys_name);
+out:
+	file_monitor_unblock(target);
+}
+
+/**
+ * peer download a file from some owners
+ * @arg: file entry related to the file to be downloaded
+ * @return: return 1 if succeeds, -1 if fails
+ */
+static void *ptop_download_task(void *arg)
+{
+	struct file_entry *fe = arg;
+	char *logic_name = fe->name;
+	char *sys_name;
+	struct monitor_target *target;
+	long int ret = 0;
+
+	/* block file monitor */
+	target = file_monitor_block(logic_name);
+	if (target == NULL) {
+		_error("Could NOT find the target with '%s'\n", logic_name);
+		ret = -1;
+		goto out;
+	}
+
+	/* get file's sys name */
+	sys_name = get_sys_name(logic_name, target);
+	if (sys_name == NULL) {
+		_error("Could NOT find sys name for '%s'\n", logic_name);
+		ret = -1;
+		goto unblock_file_monitor;
+	}
+
+	/* TODO: to uncomment the unlink(), please make sure your
+	         download function works well */
+	/* unlink(sys_name); */
+	if (fe->type == DIRECTORY) {
+		file_monitor_mkdir(sys_name, logic_name);
+		file_change_modtime(sys_name, fe->timestamp);
+	} else {
+		do_download(fe, sys_name);
+		file_change_modtime(sys_name, fe->timestamp);
+		/* TODO: start your download work here */
+	}
+
+
+	free(sys_name);
+unblock_file_monitor:
+	file_monitor_unblock(target);
+out:
+	pthread_exit((void *)0);
+}
+
+/**
+ * peer upload a file to another peer
+ * @arg: socket description for communicating with the particular peer
+ * @return: return 1 if succeeds, -1 if fails
+ */
+static void *ptop_upload_task(void *arg)
+{
+	long int p2p_conn = (long int)arg;
+	struct p2p_packet pkt;
+
+	/* TODO: start your upload work here */
+	while (recv_p2p_packet(p2p_conn, &pkt) > 0) {
+		switch (pkt.type) {
+		case P2P_FILE_LEN_REQ:
+			_debug("{ P2P_FILE_LEN_REQ }\n");
+			break;
+		case P2P_PORT_REQ:
+			_debug("{ P2P_PORT_REQ }\n");
+			break;
+		case P2P_PIECE_REQ:
+			_debug("{ P2P_PIECE_REQ }\n");
+			break;
+		}
+	}
+
+	close(p2p_conn);
+	pthread_exit((void *)0);
+}
+
+
+static void file_table_sync(struct file_table *ft, struct trans_file_table *tft)
+{
+	struct file_entry *fe;
+	pthread_t new_tid;
+	int i;
+
+	for (i = 0; i < tft->n; i++) {
+		struct trans_file_entry *te = tft->entries + i;
+		fe = file_table_find(ft, te);
+		if (fe == NULL) {
+			fe = file_table_add(ft, te);
+			pthread_create(&new_tid, NULL, ptop_download_task, fe);
+		} else {
+			peer_id_list_replace(fe, te);
+			if (te->timestamp > fe->timestamp)
+				pthread_create(&new_tid, NULL,
+						ptop_download_task, fe);
+		}
+	}
+}
+
+static int sync_files(int conn, char **target, int n)
+{
+	struct trans_file_table tft;
+	struct ptot_packet ptot_pkt;
+	struct ttop_packet ttop_pkt;
+	int ret;
+
+	/* get local file table */
+	file_table_init(&ft);
+	ret = get_file_table(&ft, target, n);
+	if (ret != 0) {
+		_error("getting file table failed\n");
+		return ret;
+	}
+	file_table_print(&ft);
+
+	/* trans local file table to trans file table */
+	trans_table_fill_from(&tft, &ft);
+
+	/* send sync request to tracker */
+	ptot_packet_init(&ptot_pkt, PEER_SYNC);
+	ptot_packet_fill(&ptot_pkt, &tft, trans_table_len(&tft));
+	ret = send_ptot_packet(conn, &ptot_pkt);
+	if (ret < 0) {
+		_error("send packet failed\n");
+		return ret;
+	}
+
+	/* get file_table which contains the items that we need to update */
+	ret = recv_ttop_packet(conn, &ttop_pkt);
+	if (ret < 0) {
+		_error("recv ttop packet failed\n");
+		return ret;
+	}
+	if (ttop_pkt.hdr.type != TRACKER_SYNC) {
+		_error("packet type is not correct\n");
+		return -1;
+	}
+
+	_debug("NEED TO SYNC FILE LOCALLY!!!\n");
+	memcpy(&tft, ttop_pkt.data, ttop_pkt.hdr.data_len);
+	file_table_sync(&ft, &tft);
+
+	return 0;
+}
+
+/**
+ * peer send file update to tracker after it updates a file in accordance with
+ * the broadcast it received from the tracker
+ * @fe: file table entry that relates to the updated file
+ * @op_type: operation type of the update, FILE_ADD, FILE_DELETE or FILE_MODIFY
+ * @return: return 1 if succeeds, -1 if fails
+ */
+static int send_file_update(struct file_entry *fe, enum operation_type op_type)
+{
+	struct ptot_packet ptot_pkt;
+	struct trans_file_table tft;
+	int ret;
+
+	_enter();
+
+	tft.n = 1;
+	trans_entry_fill_from(&tft.entries[0], fe);
+	tft.entries[0].op_type = op_type;
+
+	ptot_packet_init(&ptot_pkt, PEER_FILE_UPDATE);
+	ptot_packet_fill(&ptot_pkt, &tft, trans_table_len(&tft));
+
+
+	ret = send_ptot_packet(targ.conn, &ptot_pkt);
+	if (ret < 0)
+		_error("fail to send file update to tracker\n");
+
+	_leave();
+	return ret;
+}
+
+/**
+ * peer handles a single broadcast entry received from tracker
+ * @arg: trans file entry related to the file to be downloaded
+ * @return: return 1 if succeeds, -1 if fails
+ */
+void *broadcast_entry_handler_task(void *arg)
+{
+	struct trans_file_entry *te = arg;
+	struct file_entry *fe = NULL;
+	enum operation_type op_type;
+	int update_flag = 0;
+	pthread_t new_tid;
+
+	_enter();
+
+	if (te == NULL) {
+		_error("trans_file_entry is NULL\n");
+		pthread_exit((void *)-1);
+	}
+
+	switch (te->op_type) {
+	case FILE_ADD:
+		_debug("{ FILE_ADD } '%s'\n", te->name);
+		/* for now, assume there's no confliction */
+		fe = file_table_find(&ft, te);
+		if (fe != NULL) {
+			peer_id_list_replace(fe, te);
+			if (te->timestamp > fe->timestamp) {
+				/* create a file add task to download the file */
+				pthread_create(&new_tid, NULL,
+						ptop_download_task, fe);
+				update_flag = 1;
+				op_type = FILE_ADD;
+			}
+		} else {
+			fe = file_table_add(&ft, te);
+			if (fe == NULL)
+				_error("\tfail to add file entry\n");
+			update_flag = 1;
+			op_type = FILE_ADD;
+			/* create a file add task to download the file */
+			pthread_create(&new_tid, NULL, ptop_download_task, fe);
+		}
+
+		break;
+
+	case FILE_DELETE:
+		_debug("{ FILE_DELETE } '%s'\n", te->name);
+
+		if (file_table_delete(&ft, te) < 0)
+			_error("\tfail to delete file entry\n");
+
+		/* delete the file */
+		file_delete(te);
+
+		break;
+
+	case FILE_MODIFY:
+		_debug("{ FILE_MODIFY } '%s'\n", te->name);
+		fe = file_table_find(&ft, te);
+		if (fe == NULL) {
+			_debug("\t'%s' not exists, conflict!\n", te->name);
+			fe = file_table_add(&ft, te);
+			update_flag = 1;
+			op_type = FILE_MODIFY;
+			/* create a file add task to download the file */
+			pthread_create(&new_tid, NULL, ptop_download_task, fe);
+		} else {
+			peer_id_list_replace(fe, te);
+			if (te->timestamp > fe->timestamp) {
+				/* create a file add task to download the file */
+				pthread_create(&new_tid, NULL,
+						ptop_download_task, fe);
+				update_flag = 1;
+				op_type = FILE_MODIFY;
+			} 
+		}
+
+		break;
+
+	case FILE_NONE:
+		_debug("{ FILE_NONE }\n");
+		break;
+
+	default:
+		break;
+	}
+
+	if (update_flag)
+		send_file_update(fe, op_type);
+
+	_leave();
+	free(te);
+	pthread_exit(0);
+}
+
 static void client_cleanup()
 {
 	pthread_cancel(file_monitor_tid);
 	pthread_cancel(keep_alive_tid);
-	pthread_cancel(receiver_tid);
+	pthread_cancel(ttop_receiver_tid);
+	file_table_destroy(&ft);
 	exit(0);
 }
 
@@ -183,21 +498,41 @@ static void *keep_alive_task(void *arg)
 	pthread_exit((void *)0);
 }
 
-static void *receiver_task(void *arg)
+static void *ttop_receiver_task(void *arg)
 {
+	pthread_t broadcast_entry_handler_tid;
 	struct client_thread_arg *targ = arg;
 	int conn = targ->conn;
 	struct ttop_packet pkt;
+	struct trans_file_table tft;
+	int i;
 
 	pthread_wait_notify(&targ->wait, THREAD_RUNNING);
 	while (recv_ttop_packet(conn, &pkt) > 0) {
 		switch (pkt.hdr.type) {
 		case TRACKER_BROADCAST:
 			_debug("[ TRACKER_BROADCAST ] from tracker\n");
+			memcpy(&tft, pkt.data, pkt.hdr.data_len);
+
+			_debug("\tbroadcast entry number: %d\n", tft.n);
+			for (i = 0; i < tft.n; i++) {
+				struct trans_file_entry *te = calloc(1,
+								sizeof(*te));
+				if (te == NULL) {
+					_error("te alloc failed\n");
+					break;
+				}
+				*te = tft.entries[i];
+				pthread_create(&broadcast_entry_handler_tid,
+						NULL, broadcast_entry_handler_task,
+						te);
+			}
 			break;
+
 		case TRACKER_SYNC:
 			_debug("[ TRACKER_SYNC ] from tracker\n");
 			break;
+
 		case TRACKER_CLOSE:
 			_debug("[ TRACKER_CLOSE ] from tracker\n");
 			break;
@@ -207,10 +542,44 @@ static void *receiver_task(void *arg)
 	pthread_exit((void *)0);
 }
 
+/**
+ * open and listen on port P2P_PORT for other peer to connect
+ * @interval: number of micro-seconds that the function waits for
+ * @return: no return value
+ */
+static void *ptop_listening_task(void *arg)
+{
+	struct sockaddr_in cliaddr;
+	socklen_t cliaddr_len;
+	pthread_t ptop_upload_tid;
+	long int listenfd, ptop_conn;
+
+	_enter();
+
+	listenfd = client_tcp_listen(P2P_PORT);
+	if (listenfd < 0)
+		return 0;
+
+	while(1) {
+		ptop_conn = accept(listenfd, (struct sockaddr*)&cliaddr,
+				   &cliaddr_len);
+		if (ptop_conn < 0) {
+			_error("fail to accept a p2p connection request\n");
+			continue;
+		}
+
+		/* create a ptop_upload_task to handle this connection */
+		pthread_create(&ptop_upload_tid, NULL, ptop_upload_task,
+				(void *)ptop_conn);
+	}
+
+	_leave();
+
+	pthread_exit((void *)0);
+}
+
 void client_start()
 {
-	struct client_thread_arg targ;
-
 	bzero(&targ, sizeof(struct client_thread_arg));
 	if (parse_conf_files(&targ.conf) != 0) {
 		_error("parsing '%s' failed\n", CLIENT_CONF_FILE);
@@ -218,6 +587,9 @@ void client_start()
 	}
 	get_my_ip(targ.conf.device_name);
 	get_server_ip(targ.conf.tracker_host);
+
+	signal(SIGINT, client_cleanup);
+	signal(SIGPIPE, client_cleanup);
 
 	/* connect to tracker */
 	targ.conn = connect_tracker();
@@ -230,9 +602,6 @@ void client_start()
 		return;
 	}
 	_debug("Have registered to tracker\n");
-
-	signal(SIGINT, client_cleanup);
-	signal(SIGPIPE, client_cleanup);
 
 	/* create keep alive thread */
 	if (pthread_create(&keep_alive_tid, NULL, keep_alive_task, &targ) < 0) {
@@ -254,12 +623,28 @@ void client_start()
 		return;
 	}
 	_debug("file_monitor_task OK\n");
+
+	/* sync with tracker */
+	if (sync_files(targ.conn, targ.conf.target_dirs, targ.conf.target_n) < 0) {
+		_error("sync with tracker failed\n");
+		return;
+	}
 	
 	/* create receiver thread to avoid destroy ctr+c handler */
-	if (pthread_create(&receiver_tid, NULL, receiver_task, &targ) < 0) {
+	if (pthread_create(&ttop_receiver_tid, NULL, ttop_receiver_task, &targ) < 0) {
 		pthread_cancel(keep_alive_tid);
 		pthread_cancel(file_monitor_tid);
-		_error("Creating file monitor task failed\n");
+		_error("Creating receive ttop task failed\n");
+		return;
+	}
+    
+	/* create receive p2p request thread */
+	if (pthread_create(&ptop_listening_tid, NULL,
+				ptop_listening_task, (void *)0) < 0) {
+		pthread_cancel(keep_alive_tid);
+		pthread_cancel(file_monitor_tid);
+		pthread_cancel(ttop_receiver_tid);
+		_error("Creating receive ptop task failed\n");
 		return;
 	}
 	pthread_wait_init(&targ.wait);
