@@ -196,7 +196,7 @@ static int register_to_tracker(int conn)
  */
 static void file_delete(struct trans_file_entry *te)
 {
-	char *file_sys_name;
+	char *sys_name;
 	struct monitor_target *target;
 
 	if (te == NULL)
@@ -207,18 +207,18 @@ static void file_delete(struct trans_file_entry *te)
 		_error("Could NOT find the target with '%s'\n", te->name);
 		return;
 	}
-	file_sys_name = monitor_get_sys_name(te->name, target);
-	if (file_sys_name == NULL) {
+	sys_name = monitor_get_sys_name(te->name, target);
+	if (sys_name == NULL) {
 		_error("Could NOT find sys name for '%s'\n", te->name);
 		goto out;
 	}
 
-	if (te->file_type == DIRECTORY) {
-		/* TODO: rm directory */
-	} else
-		unlink(file_sys_name);
+	if (te->file_type == DIRECTORY)
+		file_monitor_rmdir(sys_name, te->name);
+	else
+		unlink(sys_name);
 
-	free(file_sys_name);
+	free(sys_name);
 out:
 	file_monitor_unblock(target);
 }
@@ -292,9 +292,6 @@ static void *ptop_download_task(void *arg)
 		goto unblock_file_monitor;
 	}
 
-	/* TODO: to uncomment the unlink(), please make sure your
-	   download function works well */
-	/* unlink(sys_name); */
 	if (fe->type == DIRECTORY) {
 		ret = file_monitor_mkdir(sys_name, logic_name);
 		if (ret == 0)
@@ -308,9 +305,7 @@ static void *ptop_download_task(void *arg)
 	if (ret == 0)
 		notify_tracker_add_me(fe);
 
-	struct stat st;
-	stat(sys_name, &st);
-	_debug("????????? %lu\n", (long unsigned int)st.st_mtime);
+	_debug("????????? dowload finished\n");
 
 	free(sys_name);
 unblock_file_monitor:
@@ -405,7 +400,6 @@ static void *ptop_upload_task(void *arg)
 	uint16_t new_port;
 	int listenfd;
 
-	/* TODO: start your upload work here */
 	while (recv_p2p_packet(p2p_conn, &pkt) > 0) {
 
 		if (pkt.type == P2P_FILE_LEN_REQ || pkt.type == P2P_PORT_REQ) {
@@ -543,14 +537,8 @@ static int sync_files(int conn, char **target, int n)
 	return 0;
 }
 
-/**
- * peer handles a single broadcast entry received from tracker
- * @arg: trans file entry related to the file to be downloaded
- * @return: return 1 if succeeds, -1 if fails
- */
-void *broadcast_entry_handler_task(void *arg)
+static void broadcast_entry_handler(struct trans_file_entry *te)
 {
-	struct trans_file_entry *te = arg;
 	struct file_entry *fe = NULL;
 	pthread_t new_tid;
 
@@ -584,7 +572,7 @@ void *broadcast_entry_handler_task(void *arg)
 		_debug("{ FILE_DELETE } '%s'\n", te->name);
 
 		if (file_table_delete(&ft, te) < 0)
-			_error("\tfail to delete file entry\n");
+			_error("\talready gone...\n");
 
 		/* delete the file */
 		file_delete(te);
@@ -619,8 +607,22 @@ void *broadcast_entry_handler_task(void *arg)
 	default:
 		break;
 	}
+}
 
-	free(te);
+/**
+ * peer handles a single broadcast entry received from tracker
+ * @arg: trans file entry related to the file to be downloaded
+ * @return: return 1 if succeeds, -1 if fails
+ */
+void *broadcast_handler_task(void *arg)
+{
+	struct trans_file_table *tft = arg;
+	int i;
+
+	for (i = 0; i < tft->n; i++)
+		broadcast_entry_handler(tft->entries + i);
+
+	free(tft);
 	pthread_exit(0);
 }
 
@@ -657,33 +659,27 @@ static void *keep_alive_task(void *arg)
 
 static void *ttop_receiver_task(void *arg)
 {
-	pthread_t broadcast_entry_handler_tid;
 	struct client_thread_arg *targ = arg;
 	int conn = targ->conn;
 	struct ttop_packet pkt;
-	struct trans_file_table tft;
-	int i;
+	struct trans_file_table *tft;
+	pthread_t broadcast_handler_tid;
 
 	pthread_wait_notify(&targ->wait, THREAD_RUNNING);
 	while (recv_ttop_packet(conn, &pkt) > 0) {
 		switch (pkt.hdr.type) {
 		case TRACKER_BROADCAST:
 			_debug("[ TRACKER_BROADCAST ] from tracker\n");
-			memcpy(&tft, pkt.data, pkt.hdr.data_len);
-
-			_debug("\tbroadcast entry number: %d\n", tft.n);
-			for (i = 0; i < tft.n; i++) {
-				struct trans_file_entry *te = calloc(1,
-								sizeof(*te));
-				if (te == NULL) {
-					_error("te alloc failed\n");
-					break;
-				}
-				*te = tft.entries[i];
-				pthread_create(&broadcast_entry_handler_tid,
-						NULL, broadcast_entry_handler_task,
-						te);
+			tft = calloc(1, sizeof(*tft));
+			if (tft == NULL) {
+				_error("ftf alloc failed\n");
+				break;
 			}
+			memcpy(tft, pkt.data, pkt.hdr.data_len);
+
+			_debug("\tbroadcast entry number: %d\n", tft->n);
+			pthread_create(&broadcast_handler_tid,
+					NULL, broadcast_handler_task, tft);
 			break;
 
 		case TRACKER_SYNC:

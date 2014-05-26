@@ -318,9 +318,7 @@ int file_table_delete(struct file_table *table, struct trans_file_entry *te)
 
 	pthread_mutex_lock(&table->mutex);
 	fe = __file_table_search(table, te->name);
-	if (fe == NULL)
-		_error("file '%s' does not exist!\n", te->name);
-	else {
+	if (fe != NULL) {
 		file_entry_delete(table, fe);
 		ret = 0;
 	}

@@ -39,6 +39,7 @@ void file_monitor_unblock(struct monitor_target *target);
 char *get_sys_name(char *logic_name);
 char *monitor_get_sys_name(char *logic_name, struct monitor_target *target);
 int file_monitor_mkdir(const char *sys_name, const char *logic_name);
+int file_monitor_rmdir(const char *sys_name, const char *logic_name);
 void file_change_modtime(const char *sys_name, uint64_t modtime);
 
 #endif

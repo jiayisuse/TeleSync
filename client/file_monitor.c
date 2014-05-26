@@ -55,8 +55,8 @@ inline static int get_file_timestamp(struct file_entry *fe, char *name)
 	}
 }
 
-static inline void unwatch_and_free_target(struct monitor_table *table,
-					   struct monitor_target *target)
+static inline void __unwatch_and_free_target(struct monitor_table *table,
+					     struct monitor_target *target)
 {
 	_debug("{ Un-Watching } '%s(%d)'\n", target->logic_name, target->wd);
 	table->targets[target->wd] = NULL;
@@ -65,14 +65,26 @@ static inline void unwatch_and_free_target(struct monitor_table *table,
 	free(target);
 }
 
+static inline void unwatch_and_free_target(struct monitor_table *table,
+					   struct monitor_target *target)
+{
+	pthread_mutex_lock(&table->mutex);
+	__unwatch_and_free_target(table, target);
+	pthread_mutex_unlock(&table->mutex);
+}
+
 static void unwatch_and_free_targets(struct monitor_table *table)
 {
 	struct list_head *pos, *tmp;
+
+	pthread_mutex_lock(&table->mutex);
 	list_for_each_safe(pos, tmp, &table->head) {
 		struct monitor_target *target;
 		target = list_entry(pos, struct monitor_target, l);
-		unwatch_and_free_target(table, target);
+		__unwatch_and_free_target(table, target);
 	}
+	pthread_mutex_unlock(&table->mutex);
+
 	close(table->fd);
 	bzero(table, sizeof(struct monitor_table));
 }
@@ -185,6 +197,7 @@ static int handle_event(struct inotify_event *event,
 		te->op_type = FILE_DELETE;
 		_debug("INOTIFY: Target '%s' was itself deleted\n", target_name);
 		unwatch_and_free_target(&m_table, m_table.targets[event->wd]);
+		te->file_type = DIRECTORY;
 	} else if (event->mask & IN_MODIFY) {
 		te->op_type = FILE_MODIFY;
 		_debug("INOTIFY: '%s' was modified\n", te->name);
@@ -192,6 +205,7 @@ static int handle_event(struct inotify_event *event,
 		te->op_type = FILE_DELETE;
 		_debug("INOTIFY: Target '%s' was itself moved", target_name);
 		unwatch_and_free_target(&m_table, m_table.targets[event->wd]);
+		te->file_type = DIRECTORY;
 	} else if (event->mask & IN_MOVED_FROM) {
 		te->op_type = FILE_DELETE;
 		_debug("INOTIFY: '%s' moved out\n", te->name);
@@ -432,25 +446,11 @@ inline void file_monitor_unblock(struct monitor_target *target)
 	pthread_mutex_unlock(&target->mutex);
 }
 
-/**
- * get sys name from the logic name
- * You MUST call it when you are going to operate file system
- * @logic_name: the logic name that is going to be mapped to sys
- *              name;
- * @return: the sys name, which MUST be freed after using it
- */
-char *get_sys_name(char *logic_name)
+static struct monitor_target *get_target(const char *logic_name)
 {
-	char *sys_name;
 	char *file = rindex(logic_name, '/');
 	struct monitor_target *target = NULL;
 	struct list_head *pos;
-
-	sys_name = calloc(1, MAX_NAME_LEN);
-	if (sys_name == NULL) {
-		_error("sys name alloc failed\n");
-		return NULL;
-	}
 
 	pthread_mutex_lock(&m_table.mutex);
 	*file = '\0';
@@ -463,6 +463,31 @@ char *get_sys_name(char *logic_name)
 		}
 	}
 	*file = '/';
+	pthread_mutex_unlock(&m_table.mutex);
+
+	return target;
+}
+
+/**
+ * get sys name from the logic name
+ * You MUST call it when you are going to operate file system
+ * @logic_name: the logic name that is going to be mapped to sys
+ *              name;
+ * @return: the sys name, which MUST be freed after using it
+ */
+char *get_sys_name(char *logic_name)
+{
+	char *sys_name;
+	struct monitor_target *target;
+	char *file = rindex(logic_name, '/');
+
+	sys_name = calloc(1, MAX_NAME_LEN);
+	if (sys_name == NULL) {
+		_error("sys name alloc failed\n");
+		return NULL;
+	}
+
+	target = get_target(logic_name);
 
 	if (target == NULL) {
 		free(sys_name);
@@ -519,6 +544,33 @@ int file_monitor_mkdir(const char *sys_name, const char *logic_name)
 	return ret;
 }
 
+/**
+ * remove a empty directory and remove it from file monitor list
+ * @sys_name: the directory name in file system
+ */
+int file_monitor_rmdir(const char *sys_name, const char *logic_name)
+{
+	struct monitor_target *target;
+	int ret;
+
+	ret = rmdir(sys_name);
+	if (ret < 0) {
+		_error("rmdir failed '%s'\n", logic_name);
+		perror("rmdir() failed");
+		goto out;
+	}
+
+	target = get_target(logic_name);
+	if (target == NULL) {
+		_error("Target not found for '%s'\n", logic_name);
+		ret = -1;
+		goto out;
+	}
+
+	unwatch_and_free_target(&m_table, target);
+out:
+	return ret;
+}
 /**
  * set the file's modify time to a certain modtime, as well as
  * the access time
