@@ -160,7 +160,7 @@ int my_read(int fd, char *buf, int len)
 
 	while (n < len) {
 		ret = read(fd, buf + n, left);
-		if (ret < 0)
+		if (ret <= 0)
 			break;
 		left -= ret;
 		n += ret;
@@ -243,7 +243,8 @@ static void *piece_download_task(void *arg)
 				(targ->obj->file_pieces - 1);
 		req.piece_id = piece_id;
 
-		_debug("\tdownload piece #%d, len = %d\n", piece_id, req.len);
+		_debug("\tdownload piece #%d, len = %d, peer = %s\n",
+				piece_id, req.len, ip_string(targ->owner_ip));
 
 		p2p_packet_fill(&pkt, &req, sizeof(req));
 		if (send_p2p_packet(download_conn, &pkt) < 0) {
@@ -253,13 +254,17 @@ static void *piece_download_task(void *arg)
 			break;
 		}
 
-		if ((ret_len = my_read(download_conn, piece_buf, req.len)) < 0) {
+		if ((ret_len = my_read(download_conn, piece_buf, req.len))
+				!= req.len) {
 			_error("download failed for '%s'\n",
 					targ->obj->logic_name);
 			mark_piece_failed(targ->obj, piece_id);
 			ret = -1;
 			break;
 		}
+
+		_debug("\t\tread len = %ld, peer = %s\n",
+				ret_len, ip_string(targ->owner_ip));
 
 		flock(file_fd, LOCK_EX);
 		lseek(file_fd, piece_id * piece_len, SEEK_SET);

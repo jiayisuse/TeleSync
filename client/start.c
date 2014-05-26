@@ -628,9 +628,11 @@ void *broadcast_handler_task(void *arg)
 
 static void client_cleanup()
 {
+	_enter();
 	pthread_cancel(file_monitor_tid);
 	pthread_cancel(keep_alive_tid);
 	pthread_cancel(ttop_receiver_tid);
+	pthread_cancel(ptop_listening_tid);
 	file_table_destroy(&ft);
 	exit(0);
 }
@@ -739,7 +741,6 @@ void client_start()
 	get_my_ip(targ.conf.device_name);
 	get_server_ip(targ.conf.tracker_host);
 
-	signal(SIGINT, client_cleanup);
 	signal(SIGPIPE, client_cleanup);
 
 	/* connect to tracker */
