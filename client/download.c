@@ -249,6 +249,7 @@ static void *piece_download_task(void *arg)
 		if (send_p2p_packet(download_conn, &pkt) < 0) {
 			_error("piece req send failed for #%d\n", piece_id);
 			mark_piece_failed(targ->obj, piece_id);
+			ret = -1;
 			break;
 		}
 
@@ -256,6 +257,7 @@ static void *piece_download_task(void *arg)
 			_error("download failed for '%s'\n",
 					targ->obj->logic_name);
 			mark_piece_failed(targ->obj, piece_id);
+			ret = -1;
 			break;
 		}
 
@@ -288,7 +290,7 @@ int do_download(struct file_entry *fe, char *sys_name)
 	int piece_len = ctr_info.piece_len;
 	int fd;
 	int i, n, owner_n = 0;
-	long int ret = 1;
+	long int ret = -1;
 
 	_enter("%s", fe->name);
 
