@@ -155,7 +155,7 @@ static inline bool tricky_string(char *sys_name)
 	char *index = rindex(sys_name, '/');
 
 	if (index == NULL)
-		return true;
+		return false;
 	index++;
 	if (strcmp(index, "4913") == 0)
 		return true;

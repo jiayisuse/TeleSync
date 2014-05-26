@@ -27,5 +27,7 @@ struct download_thread_arg {
 };
 
 int do_download(struct file_entry *fe, char *sys_name);
+int my_read(int fd, char *buf, int len);
+int my_write(int fd, char *buf, int len);
 
 #endif

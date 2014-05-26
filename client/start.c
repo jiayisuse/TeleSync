@@ -326,7 +326,7 @@ static void do_upload(int listenfd, const char *sys_name)
 	int file_fd, conn;
 	struct p2p_packet *pkt;
 	char *piece_buf;
-	int piece_id, ret_len;
+	int ret_len;
 
 	file_fd = open(sys_name, O_RDWR);
 	if (file_fd < 0) {
@@ -358,23 +358,25 @@ do_agin:
 
 	
 	while (recv_p2p_packet(conn, pkt) > 0) {
+		struct p2p_piece_request req;
 		if (pkt->type != P2P_PIECE_REQ) {
 			_error("is not P2P_PIECE_REQ\n");
 			goto out;
 		}
 
-		memcpy(&piece_id, pkt->data, pkt->data_len);
-		_debug("piece_id = %d\n", piece_id);
+		memcpy(&req, pkt->data, pkt->data_len);
 
 		flock(file_fd, LOCK_EX);
-		lseek(file_fd, piece_id * ctr_info.piece_len, SEEK_SET);
-		ret_len = read(file_fd, piece_buf, ctr_info.piece_len);
+		lseek(file_fd, req.piece_id * ctr_info.piece_len, SEEK_SET);
+		ret_len = my_read(file_fd, piece_buf, req.len);
 		flock(file_fd, LOCK_UN);
 		if (ret_len < 0) {
 			_error("'%s' read failed\n", sys_name);
 			goto out;
 		}
-		write(conn, piece_buf, ret_len);
+		_debug("piece_id = %d, read = %d\n", req.piece_id, ret_len);
+		ret_len = my_write(conn, piece_buf, ret_len);
+		_debug("\tsend = %d\n", ret_len);
 	}
 
 out:
@@ -552,8 +554,6 @@ void *broadcast_entry_handler_task(void *arg)
 	struct file_entry *fe = NULL;
 	pthread_t new_tid;
 
-	_enter();
-
 	if (te == NULL) {
 		_error("trans_file_entry is NULL\n");
 		pthread_exit((void *)-1);
@@ -620,7 +620,6 @@ void *broadcast_entry_handler_task(void *arg)
 		break;
 	}
 
-	_leave();
 	free(te);
 	pthread_exit(0);
 }

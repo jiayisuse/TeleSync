@@ -25,9 +25,8 @@ struct p2p_packet {
 };
 
 struct p2p_piece_request {
-	char file_name[MAX_NAME_LEN];
-	uint32_t piece_n;
-	uint16_t piece_id[MAX_PIECES];
+	uint32_t piece_id;
+	uint32_t len;
 };
 
 void ptot_packet_init(struct ptot_packet *pkt, enum ptot_packet_type type);

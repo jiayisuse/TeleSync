@@ -153,12 +153,45 @@ static inline void mark_piece_failed(struct download_obj *obj, int piece_id)
 	pthread_mutex_unlock(&obj->mutex);
 }
 
+int my_read(int fd, char *buf, int len)
+{
+	int n = 0, left = len;
+	int ret = 0;
+
+	while (n < len) {
+		ret = read(fd, buf + n, left);
+		if (ret < 0)
+			break;
+		left -= ret;
+		n += ret;
+	}
+
+	return n;
+}
+
+int my_write(int fd, char *buf, int len)
+{
+	int n = 0, left = len;
+	int ret = 0;
+
+	while (n < len) {
+		ret = write(fd, buf + n, left);
+		if (ret <= 0)
+			continue;
+		left -= ret;
+		n += ret;
+	}
+
+	return n;
+}
+
 static void *piece_download_task(void *arg)
 {
 	struct download_thread_arg *targ = arg;
 	struct p2p_packet pkt;
 	char *piece_buf;
 	int piece_len = ctr_info.piece_len;
+	struct p2p_piece_request req;
 	int file_fd;
 	int conn, download_conn;
 	uint16_t download_port;
@@ -188,7 +221,7 @@ static void *piece_download_task(void *arg)
 		goto out;
 	}
 
-	piece_buf = calloc(1, ctr_info.piece_len);
+	piece_buf = calloc(1, piece_len);
 	if (piece_buf == NULL) {
 		_error("piece buf alloc failed\n");
 		ret = -1;
@@ -204,18 +237,22 @@ static void *piece_download_task(void *arg)
 
 	p2p_packet_init(&pkt, P2P_PIECE_REQ);
 	while ((piece_id = get_new_piece(targ->obj)) >= 0) {
-		_debug("\tdownload piece #%d\n", piece_id);
+		req.len = piece_len;
+		if (piece_id == targ->obj->file_pieces - 1)
+			req.len = targ->obj->file_len - piece_len *
+				(targ->obj->file_pieces - 1);
+		req.piece_id = piece_id;
 
-		p2p_packet_fill(&pkt, &piece_id, sizeof(piece_id));
+		_debug("\tdownload piece #%d, len = %d\n", piece_id, req.len);
+
+		p2p_packet_fill(&pkt, &req, sizeof(req));
 		if (send_p2p_packet(download_conn, &pkt) < 0) {
-			/* TODO: re-arrange download */
 			_error("piece req send failed for #%d\n", piece_id);
 			mark_piece_failed(targ->obj, piece_id);
 			break;
 		}
 
-		if ((ret_len = read(download_conn, piece_buf, piece_len)) < 0) {
-			/* TODO: re-arrange download */
+		if ((ret_len = my_read(download_conn, piece_buf, req.len)) < 0) {
 			_error("download failed for '%s'\n",
 					targ->obj->logic_name);
 			mark_piece_failed(targ->obj, piece_id);
@@ -224,7 +261,7 @@ static void *piece_download_task(void *arg)
 
 		flock(file_fd, LOCK_EX);
 		lseek(file_fd, piece_id * piece_len, SEEK_SET);
-		write(file_fd, piece_buf, ret_len);
+		ret_len = my_write(file_fd, piece_buf, ret_len);
 		flock(file_fd, LOCK_UN);
 
 		mark_piece_finished(targ->obj, piece_id);
