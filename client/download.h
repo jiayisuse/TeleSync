@@ -4,6 +4,12 @@
 #include <stdint.h>
 #include <file_table.h>
 
+enum piece_status {
+	PIECE_AVAILABLE,
+	PIECE_DOWNLOADNG,
+	PIECE_FINISHED
+};
+
 struct download_obj {
 	char logic_name[MAX_NAME_LEN];
 	char sys_name[MAX_NAME_LEN];
@@ -20,6 +26,6 @@ struct download_thread_arg {
 	uint16_t owner_port;
 };
 
-void do_download(struct file_entry *fe, char *sys_name);
+int do_download(struct file_entry *fe, char *sys_name);
 
 #endif

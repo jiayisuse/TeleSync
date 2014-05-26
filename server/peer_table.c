@@ -82,10 +82,10 @@ int peer_table_delete(struct peer_table *pt, int conn)
 	list_for_each(pos, &pt->peer_head) {
 		struct peer_entry *pe = list_entry(pos, struct peer_entry, l);
 		if (pe->conn == conn) {
+			ret = pe->peerid.ip;
 			list_del(&pe->l);
 			free(pe);
 			pt->peer_num--;
-			ret = 0;
 			break;
 		}
 	}

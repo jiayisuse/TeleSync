@@ -1,6 +1,7 @@
 #define _BSD_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <strings.h>
 #include <errno.h>
@@ -149,12 +150,28 @@ static int watch_target_add_dir(struct monitor_table *table,
 	return ret;
 }
 
+static inline bool tricky_string(char *sys_name)
+{
+	char *index = rindex(sys_name, '/');
+
+	if (index == NULL)
+		return true;
+	index++;
+	if (strcmp(index, "4913") == 0)
+		return true;
+
+	return false;
+}
+
 static int handle_event(struct inotify_event *event,
 			struct trans_file_entry *te,
 			char *sys_name)
 {
 	char *target_name = m_table.targets[event->wd]->sys_name;
 	int ret = 0;
+
+	if (tricky_string(sys_name))
+		goto out;
 
 	te->file_type = event->mask & IN_ISDIR ? DIRECTORY : REGULAR;
 
@@ -170,7 +187,7 @@ static int handle_event(struct inotify_event *event,
 		unwatch_and_free_target(&m_table, m_table.targets[event->wd]);
 	} else if (event->mask & IN_MODIFY) {
 		te->op_type = FILE_MODIFY;
-		_debug("INOTIFY '%s' was modified\n", te->name);
+		_debug("INOTIFY: '%s' was modified\n", te->name);
 	} else if (event->mask & IN_MOVE_SELF) {
 		te->op_type = FILE_DELETE;
 		_debug("INOTIFY: Target '%s' was itself moved", target_name);
@@ -209,12 +226,19 @@ static int handle_event(struct inotify_event *event,
 		break;
 	case FILE_MODIFY:
 		file_table_update(&ft, te);
+		break;
 	case FILE_DELETE:
 		file_table_delete(&ft, te);
+		break;
 	default:
 		break;
 	}
 
+	/*
+	file_table_print(&ft);
+	*/
+
+out:
 	return ret;
 }
 
@@ -273,7 +297,7 @@ static int get_file_table_r(struct file_table *ft,
 				strcmp(d->d_name, "..") != 0) {
 			sprintf(fe->name, "%s/%s", logic_name, d->d_name);
 			sprintf(new_sys_name, "%s/%s", sys_name, d->d_name);
-			get_file_timestamp(fe, sys_name);
+			get_file_timestamp(fe, new_sys_name);
 			add_me_to_peer_id_list(&fe->owner_head);
 			file_entry_add(ft, fe);
 		}
@@ -310,7 +334,7 @@ static inline void __file_monitor_block(struct monitor_target *t)
 	if (t == NULL)
 		return;
 
-	t->wd = inotify_add_watch(m_table.fd, t->sys_name, BLOCK_CREATE_MAST);
+	t->wd = inotify_add_watch(m_table.fd, t->sys_name, BLOCK_ALL_MASK);
 }
 
 static inline void __file_monitor_unblock(struct monitor_target *target)
@@ -338,14 +362,15 @@ struct monitor_target *file_monitor_block(char *logic_name)
 	char sys_dir[MAX_NAME_LEN], logic_dir[MAX_NAME_LEN];
 	struct monitor_target *t;
 
+	if (first_i == NULL)
+		return NULL;
+
 	pthread_mutex_lock(&m_table.mutex);
 
 	*last_i = '\0';
 	list_for_each(pos, &m_table.head) {
 		t= list_entry(pos, struct monitor_target, l);
 		if (strcmp(t->logic_name, logic_name) == 0) {
-			t->wd = inotify_add_watch(m_table.fd, t->sys_name,
-					BLOCK_CREATE_MAST);
 			*last_i = '/';
 			pthread_mutex_unlock(&m_table.mutex);
 			goto out;
@@ -384,10 +409,9 @@ struct monitor_target *file_monitor_block(char *logic_name)
 	}
 	pthread_mutex_unlock(&m_table.mutex);
 
-	__file_monitor_block(t);
-	pthread_mutex_lock(&t->mutex);
-
 out:
+	pthread_mutex_lock(&t->mutex);
+	__file_monitor_block(t);
 	_leave();
 	return t;
 }
@@ -411,11 +435,58 @@ inline void file_monitor_unblock(struct monitor_target *target)
 /**
  * get sys name from the logic name
  * You MUST call it when you are going to operate file system
+ * @logic_name: the logic name that is going to be mapped to sys
+ *              name;
+ * @return: the sys name, which MUST be freed after using it
+ */
+char *get_sys_name(char *logic_name)
+{
+	char *sys_name;
+	char *file = rindex(logic_name, '/');
+	struct monitor_target *target = NULL;
+	struct list_head *pos;
+
+	sys_name = calloc(1, MAX_NAME_LEN);
+	if (sys_name == NULL) {
+		_error("sys name alloc failed\n");
+		return NULL;
+	}
+
+	pthread_mutex_lock(&m_table.mutex);
+	*file = '\0';
+	list_for_each(pos, &m_table.head) {
+		struct monitor_target *t =
+			list_entry(pos, struct monitor_target, l);
+		if (strcmp(t->logic_name, logic_name) == 0) {
+			target = t;
+			break;
+		}
+	}
+	*file = '/';
+
+	if (target == NULL) {
+		free(sys_name);
+		sys_name = NULL;
+		goto out;	
+	}
+
+	sprintf(sys_name, "%s%s", target->sys_name, file);
+out:
+	pthread_mutex_unlock(&m_table.mutex);
+	return sys_name;
+}
+
+/**
+ * get sys name from the logic name and the corresponding file
+ * monitor
+ * You MUST call it when you are going to operate file system
+ * @logic_name: the logic name that is going to be mapped to sys
+ *              name;
  * @target: the monitor target pointer returned by
  *          file_monitor_block()
  * @return: the sys name, which MUST be freed after using it
  */
-char *get_sys_name(char *logic_name, struct monitor_target *target)
+char *monitor_get_sys_name(char *logic_name, struct monitor_target *target)
 {
 	char *sys_name;
 	char *file = rindex(logic_name, '/');
@@ -435,12 +506,17 @@ char *get_sys_name(char *logic_name, struct monitor_target *target)
  * make a new directory and add this directory to file monitor list
  * @sys_name: the directory name in file system
  */
-void file_monitor_mkdir(const char *sys_name, const char *logic_name)
+int file_monitor_mkdir(const char *sys_name, const char *logic_name)
 {
-	mkdir(sys_name, S_IRWXU);
+	int ret = mkdir(sys_name, S_IRWXU);
+	if (ret)
+		return ret;
 	pthread_mutex_lock(&m_table.mutex);
-	watch_target_add(&m_table, sys_name, logic_name);
+	if (watch_target_add(&m_table, sys_name, logic_name) == NULL)
+		ret = -1;
 	pthread_mutex_unlock(&m_table.mutex);
+
+	return ret;
 }
 
 /**
@@ -494,7 +570,7 @@ void *file_monitor_task(void *arg)
 
 	bzero(&tft, sizeof(struct trans_file_table));
 	while (1) {
-		usleep(100000);
+		usleep(500000);
 
 		len = read(m_table.fd, event_buf, EVENT_BUF_LEN);
 		bzero(&tft, sizeof(tft));

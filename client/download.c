@@ -128,8 +128,9 @@ static int get_new_piece(struct download_obj *obj)
 
 	pthread_mutex_lock(&obj->mutex);
 	for (i = 0; i < obj->file_pieces; i++) {
-		if (obj->piece_flags[i] == 0) {
+		if (obj->piece_flags[i] == PIECE_AVAILABLE) {
 			ret = i;
+			obj->piece_flags[i] = PIECE_DOWNLOADNG;
 			break;
 		}
 	}
@@ -141,7 +142,14 @@ static int get_new_piece(struct download_obj *obj)
 static inline void mark_piece_finished(struct download_obj *obj, int piece_id)
 {
 	pthread_mutex_lock(&obj->mutex);
-	obj->piece_flags[piece_id] = 1;
+	obj->piece_flags[piece_id] = PIECE_FINISHED;
+	pthread_mutex_unlock(&obj->mutex);
+}
+
+static inline void mark_piece_failed(struct download_obj *obj, int piece_id)
+{
+	pthread_mutex_lock(&obj->mutex);
+	obj->piece_flags[piece_id] = PIECE_AVAILABLE;
 	pthread_mutex_unlock(&obj->mutex);
 }
 
@@ -154,8 +162,10 @@ static void *piece_download_task(void *arg)
 	int file_fd;
 	int conn, download_conn;
 	uint16_t download_port;
-	long int ret = 0;
+	long int ret = 0, ret_len;
 	int piece_id;
+
+	_enter();
 
        	conn = connect_to_peer(targ->owner_ip, targ->owner_port);
 	if (conn < 0) {
@@ -169,6 +179,8 @@ static void *piece_download_task(void *arg)
 		ret = -1;
 		goto close_conn;
 	}
+
+	_debug("download port = %u\n", download_port);
 
 	download_conn = connect_to_peer(targ->owner_ip, download_port);
 	if (download_conn < 0) {
@@ -192,22 +204,27 @@ static void *piece_download_task(void *arg)
 
 	p2p_packet_init(&pkt, P2P_PIECE_REQ);
 	while ((piece_id = get_new_piece(targ->obj)) >= 0) {
+		_debug("\tdownload piece #%d\n", piece_id);
+
 		p2p_packet_fill(&pkt, &piece_id, sizeof(piece_id));
 		if (send_p2p_packet(download_conn, &pkt) < 0) {
-			_error("piece req send failed for #%d\n", piece_id);
 			/* TODO: re-arrange download */
+			_error("piece req send failed for #%d\n", piece_id);
+			mark_piece_failed(targ->obj, piece_id);
 			break;
 		}
-		if ((ret = read(download_conn, piece_buf, piece_len)) < 0) {
+
+		if ((ret_len = read(download_conn, piece_buf, piece_len)) < 0) {
 			/* TODO: re-arrange download */
 			_error("download failed for '%s'\n",
 					targ->obj->logic_name);
+			mark_piece_failed(targ->obj, piece_id);
 			break;
 		}
 
 		flock(file_fd, LOCK_EX);
 		lseek(file_fd, piece_id * piece_len, SEEK_SET);
-		write(file_fd, piece_buf, ret);
+		write(file_fd, piece_buf, ret_len);
 		flock(file_fd, LOCK_UN);
 
 		mark_piece_finished(targ->obj, piece_id);
@@ -222,10 +239,11 @@ close_conn:
 	close(conn);
 out:
 	free(targ);
+	_leave();
 	pthread_exit((void *)ret);
 }
 
-void do_download(struct file_entry *fe, char *sys_name)
+int do_download(struct file_entry *fe, char *sys_name)
 {
 	struct download_obj obj;
 	struct peer_id_list *a_owner;
@@ -306,5 +324,5 @@ wait_tasks:
 free_piece_flags:
 	free(obj.piece_flags);
 out:
-	return;
+	return ret;
 }

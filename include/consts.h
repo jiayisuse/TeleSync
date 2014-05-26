@@ -11,6 +11,8 @@
 #define MAX_CONNECTIONS		1024
 #define CHECK_ALIVE_DIFF	10000	/* check alive different micro sec */
 #define MAX_PIECES		1024
+#define MAX_P2P_PORT		1000
+#define BASE_P2P_PORT		5100
 
 #define TRACKER_RECEIVER_PORT	4092
 #define P2P_PORT		4192

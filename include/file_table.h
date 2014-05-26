@@ -48,6 +48,7 @@ struct file_entry *file_table_find(struct file_table *table,
 				   struct trans_file_entry *te);
 int file_table_update(struct file_table *table, struct trans_file_entry *te);
 int file_table_delete(struct file_table *table, struct trans_file_entry *te);
+void file_table_delete_owner(struct file_table *table, uint32_t ip);
 void file_table_destroy(struct file_table *table);
 void file_table_print(struct file_table *table);
 

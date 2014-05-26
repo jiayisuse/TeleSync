@@ -171,7 +171,7 @@ int file_entry_update(struct file_entry *fe, struct trans_file_entry *te)
 		ret = -1;
 	pthread_rwlock_unlock(&fe->rwlock);
 
-	return 0;
+	return ret;
 }
 
 /**
@@ -327,6 +327,36 @@ int file_table_delete(struct file_table *table, struct trans_file_entry *te)
 	pthread_mutex_unlock(&table->mutex);
 
 	return ret;
+}
+
+void file_table_delete_owner(struct file_table *table, uint32_t ip)
+{
+	struct file_entry *fe;
+	struct list_head *pos, *tmp;
+	int i;
+
+	pthread_mutex_lock(&table->mutex);
+	hash_for_each(table->file_htable, i, fe, hlist) {
+		if (fe == NULL)
+			continue;
+
+		pthread_rwlock_wrlock(&fe->rwlock);
+		list_for_each_safe(pos, tmp, &fe->owner_head) {
+			struct peer_id_list *p = list_entry(pos,
+					struct peer_id_list, l);
+			if (p->ip == ip) {
+				list_del(&p->l);
+				free(p);
+			}
+		}
+		pthread_rwlock_unlock(&fe->rwlock);
+
+		if (list_empty(&fe->owner_head)) {
+			hash_del(&fe->hlist);
+			free(fe);
+		}
+	}
+	pthread_mutex_unlock(&table->mutex);
 }
 
 void file_table_destroy(struct file_table *table)

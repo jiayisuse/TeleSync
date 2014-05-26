@@ -61,14 +61,14 @@ static void broadcast_update(struct peer_table *pt,
 	struct list_head *pos;
 	struct ttop_packet pkt;
 
-	_enter();
+	_enter("table len = %d", tft->n);
 
-	if (pt == NULL || tft == NULL)
-		return;
+	if (pt == NULL || tft == NULL || tft->n == 0)
+		goto out;
 
 	pkt.hdr.type = TRACKER_BROADCAST;
 	pkt.hdr.data_len = trans_table_len(tft);
-	memcpy(pkt.data, &ctr_info, pkt.hdr.data_len);
+	memcpy(pkt.data, tft, pkt.hdr.data_len);
 
 	/* send ACCEPT back to peer */
 	list_for_each(pos, &pt->peer_head) {
@@ -79,6 +79,7 @@ static void broadcast_update(struct peer_table *pt,
 						pe->peerid.ip);
 	}
 
+out:
 	_leave();
 }
 
@@ -260,6 +261,7 @@ static void *sync_task(void *arg)
 	}
 
 	/* update peer's file table */
+	_debug("update peer's file table, n = %d\n", tft->n);
 	hash_for_each(ft.file_htable, i, fe, hlist) {
 		struct trans_file_entry *te;
 		te = trans_file_search(tft, fe->name);
@@ -278,6 +280,7 @@ static void *sync_task(void *arg)
 		}
 	}
 	/* send updated file table back to the peer */
+	_debug("update traker's file table, n = %d\n", tft->n);
 	pkt->hdr.type = TRACKER_SYNC;
 	pkt->hdr.data_len = trans_table_len(peer_tft);
 	memcpy(pkt->data, peer_tft, pkt->hdr.data_len);
@@ -320,7 +323,9 @@ out:
 static void *peer_file_update_task(void *arg)
 {
 	/* extracts the trans_file_table sent by receiver_handler_task thread */
-	struct trans_file_table *tft = (struct trans_file_table *)arg;
+	struct server_thread_arg *targ = arg;
+	struct trans_file_table *tft = targ->data;
+	int conn = targ->conn;
 	struct trans_file_table new_tft;
 	enum operation_type op_type;
 	int entry_n = tft->n;
@@ -392,9 +397,10 @@ static void *peer_file_update_task(void *arg)
 	/* after scanning the entire trans_file_table, check if need
 	   to broadcast the entire file table to all peers alive */
 	if (new_tft.n > 0)
-		broadcast_update(&pt, &new_tft, -1);
+		broadcast_update(&pt, &new_tft, conn);
 
 	_leave();
+	free(targ);
 	free(tft);
 	pthread_exit((void *)0);
 }
@@ -402,7 +408,23 @@ static void *peer_file_update_task(void *arg)
 static void receiver_task_cleanup(void *arg)
 {
 	long int conn = (long int)arg;
-	peer_table_delete(&pt, conn);
+	uint32_t peer_ip;
+	struct trans_file_table *tft;
+	int i;
+
+	_enter();
+
+	peer_ip = peer_table_delete(&pt, conn);
+	file_table_delete_owner(&ft, peer_ip);
+	tft = calloc(1, sizeof(struct trans_file_table));
+	if (tft == NULL)
+		return;
+	trans_table_fill_from(tft, &ft);
+	for (i = 0; i < tft->n; i++)
+		tft->entries[i].op_type = FILE_MODIFY;
+	broadcast_update(&pt, tft, -1);
+
+	free(tft);
 }
 
 static void *receiver_task(void *arg)
@@ -474,6 +496,13 @@ static void *receiver_task(void *arg)
 			_debug("[ PEER_FILE_UPDATE from '%s']\n", ip_string(ip));
 			/* extracts trans_file_table from received packet's
 			   data field */
+			targ = calloc(1, sizeof(*targ));
+			if (targ == NULL) {
+				_error("targ alloc failed\n");
+				pthread_exit((void *)-1);
+			}
+			targ->conn = conn;
+
 			tft = calloc(1, sizeof(*tft));
 			if (tft == NULL) {
 				_error("trans file table alloc failed\n");
@@ -483,8 +512,9 @@ static void *receiver_task(void *arg)
 			/* creates peer_file_update thread
 			   passes the trans_file_table structure it needs to
 			   handle as argument */
+			targ->data = tft;
 			pthread_create(&new_tid, NULL,
-					peer_file_update_task, tft);
+					peer_file_update_task, targ);
 			break;
 		default:
 			break;
@@ -494,7 +524,7 @@ static void *receiver_task(void *arg)
 	pthread_cleanup_pop(0);
 
 	_leave();
-	peer_table_delete(&pt, conn);
+	receiver_task_cleanup((void *)conn);
 	pthread_exit((void *)0);
 }
 

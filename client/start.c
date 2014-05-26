@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <errno.h>
 #include <pthread.h>
 #include <signal.h>
 #include <unistd.h>
@@ -11,6 +12,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <sys/file.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <net/if.h>
@@ -27,6 +29,7 @@
 uint32_t my_ip;
 uint32_t serv_ip;
 struct ttop_control_info ctr_info;
+struct file_table ft;
 
 static pthread_t file_monitor_tid;
 static pthread_t keep_alive_tid;
@@ -34,7 +37,8 @@ static pthread_t ttop_receiver_tid;
 static pthread_t ptop_listening_tid;
 static struct client_thread_arg targ;
 
-struct file_table ft;
+static uint16_t p2p_ports[MAX_P2P_PORT] = { 0 };
+static pthread_mutex_t p2p_port_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 static void get_my_ip(char *if_name)
@@ -118,6 +122,31 @@ static int parse_conf_files(struct client_conf_info *conf)
 	return 0;
 }
 
+static int16_t get_free_p2p_port()
+{
+	int i = 0;
+	int16_t port = -1;
+
+	pthread_mutex_lock(&p2p_port_mutex);
+	for (i = 0; i < MAX_P2P_PORT; i++) {
+		if (p2p_ports[i] == 0) {
+			p2p_ports[i] = 1;
+			port = i + BASE_P2P_PORT;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&p2p_port_mutex);
+
+	return port;
+}
+
+static void put_p2p_port(uint16_t port)
+{
+	pthread_mutex_lock(&p2p_port_mutex);
+	p2p_ports[port - BASE_P2P_PORT] = 0;
+	pthread_mutex_unlock(&p2p_port_mutex);
+}
+
 static int connect_tracker()
 {
 	struct sockaddr_in servaddr;
@@ -178,7 +207,7 @@ static void file_delete(struct trans_file_entry *te)
 		_error("Could NOT find the target with '%s'\n", te->name);
 		return;
 	}
-	file_sys_name = get_sys_name(te->name, target);
+	file_sys_name = monitor_get_sys_name(te->name, target);
 	if (file_sys_name == NULL) {
 		_error("Could NOT find sys name for '%s'\n", te->name);
 		goto out;
@@ -192,6 +221,46 @@ static void file_delete(struct trans_file_entry *te)
 	free(file_sys_name);
 out:
 	file_monitor_unblock(target);
+}
+
+static void notify_tracker_add_me(struct file_entry *fe)
+{
+	struct ptot_packet *pkt;
+	struct trans_file_table *tft;
+	struct trans_file_entry *te;
+
+	pkt = calloc(1, sizeof(*pkt));
+	if (pkt == NULL) {
+		_error("pkt alloc failed\n");
+		goto out;
+	}
+	tft = calloc(1, sizeof(*tft));
+	if (tft == NULL) {
+		_error("tft alloc failed\n");
+		goto free_pkt;
+	}
+
+	te = tft->entries + tft->n;
+	pthread_rwlock_rdlock(&fe->rwlock);
+	strcpy(te->name, fe->name);
+	te->timestamp = fe->timestamp;
+	pthread_rwlock_unlock(&fe->rwlock);
+	te->file_type = fe->type;
+	te->op_type = FILE_MODIFY;
+	te->owners[te->owner_n].ip = my_ip;
+	te->owners[te->owner_n].port = P2P_PORT;
+	te->owner_n++;
+	tft->n++;
+
+	ptot_packet_init(pkt, PEER_FILE_UPDATE);
+	ptot_packet_fill(pkt, tft, trans_table_len(tft));
+	if (send_ptot_packet(targ.conn, pkt) < 0)
+		_error("send ptot packet failed\n");
+
+free_pkt:
+	free(pkt);
+out:
+	return;
 }
 
 /**
@@ -216,7 +285,7 @@ static void *ptop_download_task(void *arg)
 	}
 
 	/* get file's sys name */
-	sys_name = get_sys_name(logic_name, target);
+	sys_name = monitor_get_sys_name(logic_name, target);
 	if (sys_name == NULL) {
 		_error("Could NOT find sys name for '%s'\n", logic_name);
 		ret = -1;
@@ -224,23 +293,99 @@ static void *ptop_download_task(void *arg)
 	}
 
 	/* TODO: to uncomment the unlink(), please make sure your
-	         download function works well */
+	   download function works well */
 	/* unlink(sys_name); */
 	if (fe->type == DIRECTORY) {
-		file_monitor_mkdir(sys_name, logic_name);
-		file_change_modtime(sys_name, fe->timestamp);
+		ret = file_monitor_mkdir(sys_name, logic_name);
+		if (ret == 0)
+			file_change_modtime(sys_name, fe->timestamp);
 	} else {
-		do_download(fe, sys_name);
-		file_change_modtime(sys_name, fe->timestamp);
-		/* TODO: start your download work here */
+		ret = do_download(fe, sys_name);
+		if (ret == 0)
+			file_change_modtime(sys_name, fe->timestamp);
 	}
+	
+	if (ret == 0)
+		notify_tracker_add_me(fe);
 
+	struct stat st;
+	stat(sys_name, &st);
+	_debug("????????? %lu\n", (long unsigned int)st.st_mtime);
 
 	free(sys_name);
 unblock_file_monitor:
 	file_monitor_unblock(target);
 out:
-	pthread_exit((void *)0);
+	pthread_exit((void *)ret);
+}
+
+static void do_upload(int listenfd, const char *sys_name)
+{
+	struct sockaddr_in cliaddr;
+	socklen_t clilen;
+	int file_fd, conn;
+	struct p2p_packet *pkt;
+	char *piece_buf;
+	int piece_id, ret_len;
+
+	file_fd = open(sys_name, O_RDWR);
+	if (file_fd < 0) {
+		_error("'%s' open failed\n", sys_name);
+		return;
+	}
+
+	pkt = calloc(1, sizeof(struct p2p_packet));
+	if (pkt == NULL) {
+		_error("pkt alloc failed\n");
+		goto close_fd;
+	}
+	piece_buf = calloc(1, ctr_info.piece_len);
+	if (piece_buf == NULL) {
+		_error("piece buf alloc failed\n");
+		goto free_pkt;
+	}
+
+do_agin:
+	conn = accept(listenfd, (struct sockaddr*)&cliaddr, &clilen);
+	if (conn < 0) {
+		if (errno == EINTR)
+			goto do_agin;
+		else {
+			perror("accept error");
+			goto free_piece_buf;
+		}   
+	}   
+
+	
+	while (recv_p2p_packet(conn, pkt) > 0) {
+		if (pkt->type != P2P_PIECE_REQ) {
+			_error("is not P2P_PIECE_REQ\n");
+			goto out;
+		}
+
+		memcpy(&piece_id, pkt->data, pkt->data_len);
+		_debug("piece_id = %d\n", piece_id);
+
+		flock(file_fd, LOCK_EX);
+		lseek(file_fd, piece_id * ctr_info.piece_len, SEEK_SET);
+		ret_len = read(file_fd, piece_buf, ctr_info.piece_len);
+		flock(file_fd, LOCK_UN);
+		if (ret_len < 0) {
+			_error("'%s' read failed\n", sys_name);
+			goto out;
+		}
+		write(conn, piece_buf, ret_len);
+	}
+
+out:
+	close(conn);
+free_piece_buf:
+	free(piece_buf);
+free_pkt:
+	free(pkt);
+close_fd:
+	close(file_fd);
+	return;
 }
 
 /**
@@ -252,23 +397,79 @@ static void *ptop_upload_task(void *arg)
 {
 	long int p2p_conn = (long int)arg;
 	struct p2p_packet pkt;
+	char logic_name[MAX_NAME_LEN];
+	char *sys_name;
+	struct stat st;
+	uint16_t new_port;
+	int listenfd;
 
 	/* TODO: start your upload work here */
 	while (recv_p2p_packet(p2p_conn, &pkt) > 0) {
+
+		if (pkt.type == P2P_FILE_LEN_REQ || pkt.type == P2P_PORT_REQ) {
+			memcpy(logic_name, pkt.data, pkt.data_len);
+			sys_name = get_sys_name(logic_name);
+			if (sys_name == NULL) {
+				_error("can't get sys name for '%s'\n",
+						logic_name);
+				goto close_out;
+			}
+		}
+
 		switch (pkt.type) {
 		case P2P_FILE_LEN_REQ:
 			_debug("{ P2P_FILE_LEN_REQ }\n");
+
+			if (stat(sys_name, &st) < 0) {
+				_error("stat error for '%s'\n", logic_name);
+				goto free_sys_name;
+			}
+			p2p_packet_init(&pkt, P2P_FILE_LEN_RET);
+			p2p_packet_fill(&pkt, &st.st_size, sizeof(st.st_size));
+			if (send_p2p_packet(p2p_conn, &pkt) < 0) {
+				_error("P2P_FILE_LEN_RET send failed\n");
+				goto free_sys_name;
+			}
+
+			_debug("\t'%s(%u bytes)'\n",
+					sys_name, (unsigned int)st.st_size);
 			break;
+
 		case P2P_PORT_REQ:
 			_debug("{ P2P_PORT_REQ }\n");
+
+			new_port = get_free_p2p_port();
+			p2p_packet_init(&pkt, P2P_PORT_RET);
+			p2p_packet_fill(&pkt, &new_port, sizeof(new_port));
+			if (send_p2p_packet(p2p_conn, &pkt) < 0) {
+				_error("P2P_FILE_PORT_RET send failed\n");
+				goto free_sys_name;
+			}
+
+			_debug("\t new port = %u\n", new_port);
+
+			listenfd = client_tcp_listen(new_port);
+			if (listenfd < 0) {
+				_error("listen fd create failed\n");
+				goto free_sys_name;
+			}
+
+			do_upload(listenfd, sys_name);
+			close(listenfd);
+			put_p2p_port(new_port);
+
 			break;
-		case P2P_PIECE_REQ:
-			_debug("{ P2P_PIECE_REQ }\n");
+
+		default:
 			break;
 		}
 	}
 
+free_sys_name:
+	free(sys_name);
+close_out:
 	close(p2p_conn);
+	_leave();
 	pthread_exit((void *)0);
 }
 
@@ -341,37 +542,6 @@ static int sync_files(int conn, char **target, int n)
 }
 
 /**
- * peer send file update to tracker after it updates a file in accordance with
- * the broadcast it received from the tracker
- * @fe: file table entry that relates to the updated file
- * @op_type: operation type of the update, FILE_ADD, FILE_DELETE or FILE_MODIFY
- * @return: return 1 if succeeds, -1 if fails
- */
-static int send_file_update(struct file_entry *fe, enum operation_type op_type)
-{
-	struct ptot_packet ptot_pkt;
-	struct trans_file_table tft;
-	int ret;
-
-	_enter();
-
-	tft.n = 1;
-	trans_entry_fill_from(&tft.entries[0], fe);
-	tft.entries[0].op_type = op_type;
-
-	ptot_packet_init(&ptot_pkt, PEER_FILE_UPDATE);
-	ptot_packet_fill(&ptot_pkt, &tft, trans_table_len(&tft));
-
-
-	ret = send_ptot_packet(targ.conn, &ptot_pkt);
-	if (ret < 0)
-		_error("fail to send file update to tracker\n");
-
-	_leave();
-	return ret;
-}
-
-/**
  * peer handles a single broadcast entry received from tracker
  * @arg: trans file entry related to the file to be downloaded
  * @return: return 1 if succeeds, -1 if fails
@@ -380,8 +550,6 @@ void *broadcast_entry_handler_task(void *arg)
 {
 	struct trans_file_entry *te = arg;
 	struct file_entry *fe = NULL;
-	enum operation_type op_type;
-	int update_flag = 0;
 	pthread_t new_tid;
 
 	_enter();
@@ -397,21 +565,16 @@ void *broadcast_entry_handler_task(void *arg)
 		/* for now, assume there's no confliction */
 		fe = file_table_find(&ft, te);
 		if (fe != NULL) {
+			_debug("\tOLD File\n");
 			peer_id_list_replace(fe, te);
 			if (te->timestamp > fe->timestamp) {
 				/* create a file add task to download the file */
 				pthread_create(&new_tid, NULL,
 						ptop_download_task, fe);
-				update_flag = 1;
-				op_type = FILE_ADD;
 			}
 		} else {
+			_debug("\tNEW File\n");
 			fe = file_table_add(&ft, te);
-			if (fe == NULL)
-				_error("\tfail to add file entry\n");
-			update_flag = 1;
-			op_type = FILE_ADD;
-			/* create a file add task to download the file */
 			pthread_create(&new_tid, NULL, ptop_download_task, fe);
 		}
 
@@ -434,20 +597,18 @@ void *broadcast_entry_handler_task(void *arg)
 		if (fe == NULL) {
 			_debug("\t'%s' not exists, conflict!\n", te->name);
 			fe = file_table_add(&ft, te);
-			update_flag = 1;
-			op_type = FILE_MODIFY;
 			/* create a file add task to download the file */
 			pthread_create(&new_tid, NULL, ptop_download_task, fe);
 		} else {
 			peer_id_list_replace(fe, te);
-			if (te->timestamp > fe->timestamp) {
+			if (te->timestamp > fe->timestamp)
 				/* create a file add task to download the file */
 				pthread_create(&new_tid, NULL,
 						ptop_download_task, fe);
-				update_flag = 1;
-				op_type = FILE_MODIFY;
-			} 
 		}
+		/*
+		file_table_print(&ft);
+		*/
 
 		break;
 
@@ -458,9 +619,6 @@ void *broadcast_entry_handler_task(void *arg)
 	default:
 		break;
 	}
-
-	if (update_flag)
-		send_file_update(fe, op_type);
 
 	_leave();
 	free(te);
@@ -572,8 +730,6 @@ static void *ptop_listening_task(void *arg)
 		pthread_create(&ptop_upload_tid, NULL, ptop_upload_task,
 				(void *)ptop_conn);
 	}
-
-	_leave();
 
 	pthread_exit((void *)0);
 }

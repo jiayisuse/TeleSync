@@ -7,8 +7,9 @@
 #define DEFAULT_WATCH_MASK	(IN_CREATE | IN_DELETE | IN_DELETE_SELF |	\
 				 IN_MODIFY | IN_MOVE_SELF |			\
 				 IN_MOVED_FROM | IN_MOVED_TO)
-#define BLOCK_CREATE_MAST	(IN_DELETE | IN_DELETE_SELF | IN_MOVE_SELF |	\
+#define BLOCK_CREATE_MASK	(IN_DELETE | IN_DELETE_SELF | IN_MOVE_SELF |	\
 				 IN_MOVED_FROM | IN_MOVED_TO)
+#define BLOCK_ALL_MASK		(IN_DELETE_SELF | IN_MOVE_SELF)
 #define EVENT_LEN		(sizeof(struct inotify_event ))
 #define EVENT_BUF_LEN		(1024 * (EVENT_LEN + 16))
 #define WD_HASH_SIZE		128
@@ -35,8 +36,9 @@ int get_file_table(struct file_table *ft, char **target, int n);
 
 struct monitor_target *file_monitor_block(char *file_name);
 void file_monitor_unblock(struct monitor_target *target);
-char *get_sys_name(char *logic_name, struct monitor_target *target);
-void file_monitor_mkdir(const char *sys_name, const char *logic_name);
+char *get_sys_name(char *logic_name);
+char *monitor_get_sys_name(char *logic_name, struct monitor_target *target);
+int file_monitor_mkdir(const char *sys_name, const char *logic_name);
 void file_change_modtime(const char *sys_name, uint64_t modtime);
 
 #endif
