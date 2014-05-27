@@ -14,6 +14,7 @@
 #include "download.h"
 
 
+extern uint32_t my_ip;
 extern struct ttop_control_info ctr_info;
 
 static void download_obj_init(struct download_obj *obj,
@@ -173,13 +174,15 @@ int my_read(int fd, char *buf, int len)
 
 int my_write(int fd, char *buf, int len)
 {
-	int n = 0, left = len;
+	int try_n = 0, n = 0, left = len;
 	int ret = 0;
 
 	while (n < len) {
 		ret = write(fd, buf + n, left);
 		if (ret < 0)
-			continue;
+			break;
+		else if (ret == 0 && try_n-- == 0)
+			break;
 		left -= ret;
 		n += ret;
 	}
@@ -200,8 +203,12 @@ static void *piece_download_task(void *arg)
 	long int ret = 0, ret_len;
 	int piece_id;
 
-	_enter("file = '%s', ip = '%s'\n",
-			targ->obj->logic_name, ip_string(targ->owner_ip));
+	_enter("file = '%s', my = %u, ip = %u\n",
+			targ->obj->logic_name,
+			ip_string(my_ip), ip_string(targ->owner_ip));
+
+	if (targ->owner_ip == my_ip)
+		goto out;
 
        	conn = connect_to_peer(targ->owner_ip, targ->owner_port);
 	if (conn < 0) {
@@ -216,7 +223,8 @@ static void *piece_download_task(void *arg)
 		goto close_conn;
 	}
 
-	_debug("download port = %u\n", download_port);
+	_debug("\tdownload port = %u, from %u\n",
+			download_port, ip_string(targ->owner_ip));
 
 	download_conn = connect_to_peer(targ->owner_ip, download_port);
 	if (download_conn < 0) {
@@ -246,7 +254,7 @@ static void *piece_download_task(void *arg)
 				(targ->obj->file_pieces - 1);
 		req.piece_id = piece_id;
 
-		_debug("\tdownload piece #%d, len = %d, peer = %s\n",
+		_debug("\tdownload piece #%d, len = %d, peer = %u\n",
 				piece_id, req.len, ip_string(targ->owner_ip));
 
 		p2p_packet_fill(&pkt, &req, sizeof(req));
@@ -266,7 +274,7 @@ static void *piece_download_task(void *arg)
 			break;
 		}
 
-		_debug("\t\tread len = %ld, peer = %s\n",
+		_debug("\t\tread len = %ld, peer = %u\n",
 				ret_len, ip_string(targ->owner_ip));
 
 		flock(file_fd, LOCK_EX);
@@ -286,7 +294,7 @@ close_conn:
 	close(conn);
 out:
 	free(targ);
-	_leave();
+	_leave("onwer #%u", ip_string(targ->owner_ip));
 	pthread_exit((void *)ret);
 }
 

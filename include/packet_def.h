@@ -75,11 +75,18 @@ struct ttop_packet {
 };
 
 
+/*
 static inline char *ip_string(uint32_t ip)
 {
 	struct in_addr in;
 	in.s_addr = ip;
 	return inet_ntoa(in);
+}
+*/
+
+static inline unsigned int ip_string(uint32_t ip)
+{
+	return ntohl(ip) & 0xff;
 }
 
 #endif

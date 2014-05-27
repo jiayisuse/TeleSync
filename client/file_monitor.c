@@ -575,7 +575,6 @@ int file_monitor_rmdir(const char *sys_name, const char *logic_name)
 	char cmd[MAX_LINE];
 
 	sprintf(cmd, "rm -r %s", sys_name);
-	_debug("!!!!!!!!!! %s\n", cmd);
 	system(cmd);
 	/*
 	ret = rmdir(sys_name);

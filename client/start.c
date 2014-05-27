@@ -52,6 +52,8 @@ static void get_my_ip(char *if_name)
 	ioctl(fd, SIOCGIFADDR, &ifr);
 	close(fd);
 
+	_debug("my id is %u\n", ip_string(my_ip));
+
 	memcpy(&my_ip, &(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr),
 			sizeof(my_ip));
 }
@@ -61,7 +63,7 @@ static inline void get_server_ip(char *host_name)
 	struct hostent *host_info;
 	host_info = gethostbyname(host_name);
 	memcpy(&serv_ip, host_info->h_addr_list[0], host_info->h_length);
-	_debug("server: '%s' %s\n", host_name, ip_string(serv_ip));
+	_debug("server: '%s' %u\n", host_name, ip_string(serv_ip));
 }
 
 static inline uint64_t get_current_timestamp()
@@ -201,6 +203,8 @@ static void file_delete(struct trans_file_entry *te)
 
 	if (te == NULL)
 		return;
+
+	_enter("%s", te->name);
 	
 	target = file_monitor_block(te->name, true);
 	if (target == NULL) {
@@ -221,6 +225,7 @@ static void file_delete(struct trans_file_entry *te)
 	free(sys_name);
 unblock:
 	file_monitor_unblock(target);
+	_leave();
 	return;
 }
 
@@ -366,11 +371,13 @@ do_agin:
 		lseek(file_fd, req.piece_id * ctr_info.piece_len, SEEK_SET);
 		ret_len = my_read(file_fd, piece_buf, req.len);
 		flock(file_fd, LOCK_UN);
-		if (ret_len < 0) {
-			_error("'%s' read failed\n", sys_name);
+		if (ret_len != req.len) {
+			_error("'%s' read failed, (%d/%d)\n",
+					sys_name, ret_len, req.len);
 			goto out;
 		}
-		_debug("piece_id = %d, read = %d\n", req.piece_id, ret_len);
+		_debug("\t^_^ ^_^ UPLOADING... piece_id = %d, read = %d\n",
+				req.piece_id, ret_len);
 		ret_len = my_write(conn, piece_buf, ret_len);
 		_debug("\tsend = %d\n", ret_len);
 	}
@@ -433,7 +440,7 @@ static void *ptop_upload_task(void *arg)
 			break;
 
 		case P2P_PORT_REQ:
-			_debug("{ P2P_PORT_REQ }\n");
+			_debug("{ P2P_PORT_REQ } %s\n", logic_name);
 
 			new_port = get_free_p2p_port();
 			p2p_packet_init(&pkt, P2P_PORT_RET);
@@ -576,6 +583,8 @@ static void broadcast_entry_handler(struct trans_file_entry *te)
 			peer_id_list_replace(fe, te);
 			peer_id_list_remove_myself(fe);
 			if (te->timestamp > fe->timestamp) {
+				_debug("te timestamp = %lu, fe timestamp = %lu\n",
+						te->timestamp, fe->timestamp);
 				/* create a file add task to download the file */
 				file_entry_update_timestamp(fe, te->timestamp);
 				pthread_create(&new_tid, NULL,
@@ -680,6 +689,11 @@ static void *keep_alive_task(void *arg)
 		}
 	}
 
+	_debug("\n");
+	_debug("Disconnected with server!\n");
+	_debug("\n");
+	pthread_cancel(ttop_receiver_tid);
+
 	pthread_exit((void *)0);
 }
 
@@ -689,7 +703,7 @@ static void *ttop_receiver_task(void *arg)
 	int i, conn = targ->conn;
 	struct ttop_packet pkt;
 	struct trans_file_table *tft;
-	pthread_t broadcast_handler_tid;
+	/* pthread_t broadcast_handler_tid; */
 
 	pthread_wait_notify(&targ->wait, THREAD_RUNNING);
 	while (recv_ttop_packet(conn, &pkt) > 0) {

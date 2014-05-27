@@ -10,6 +10,11 @@
 #include <list.h>
 #include <trans_file_table.h>
 
+enum file_status {
+	FILE_AVAILABLE,
+	FILE_DOWLOADING,
+};
+
 struct peer_id_list {
 	uint32_t ip;
 	uint16_t port;
@@ -18,6 +23,7 @@ struct peer_id_list {
 
 struct file_entry {
 	char name[MAX_NAME_LEN];
+	enum file_status status;
 	uint64_t timestamp;
 	enum file_type type;
 	struct list_head owner_head;
