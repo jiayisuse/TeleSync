@@ -210,7 +210,7 @@ static void file_delete(struct trans_file_entry *te)
 	sys_name = monitor_get_sys_name(te->name, target);
 	if (sys_name == NULL) {
 		_error("Could NOT find sys name for '%s'\n", te->name);
-		goto out;
+		goto unblock;
 	}
 
 	if (te->file_type == DIRECTORY)
@@ -219,8 +219,9 @@ static void file_delete(struct trans_file_entry *te)
 		unlink(sys_name);
 
 	free(sys_name);
-out:
+unblock:
 	file_monitor_unblock(target);
+	return;
 }
 
 static void notify_tracker_add_me(struct file_entry *fe)
@@ -305,7 +306,7 @@ static void *ptop_download_task(void *arg)
 	if (ret == 0)
 		notify_tracker_add_me(fe);
 
-	_debug("????????? dowload finished\n");
+	_debug("~~~~~~~~~~~~~ dowload finished\n");
 
 	free(sys_name);
 unblock_file_monitor:

@@ -58,6 +58,8 @@ inline static int get_file_timestamp(struct file_entry *fe, char *name)
 static inline void __unwatch_and_free_target(struct monitor_table *table,
 					     struct monitor_target *target)
 {
+	if (target == NULL)
+		return;
 	_debug("{ Un-Watching } '%s(%d)'\n", target->logic_name, target->wd);
 	table->targets[target->wd] = NULL;
 	inotify_rm_watch(table->fd, target->wd);
@@ -212,6 +214,9 @@ static int handle_event(struct inotify_event *event,
 	} else if (event->mask & IN_MOVED_TO) {
 		te->op_type = FILE_ADD;
 		_debug("INOTIFY: '%s' moved into\n", te->name);
+	} else if (event->mask & IN_ATTRIB) {
+		_debug("INOTIFY: '%s' Metadata changed\n", te->name);
+		te->op_type = FILE_MODIFY;
 	} else {
 		te->op_type = FILE_NONE;
 		ret = -1;
@@ -446,7 +451,7 @@ inline void file_monitor_unblock(struct monitor_target *target)
 	pthread_mutex_unlock(&target->mutex);
 }
 
-static struct monitor_target *get_target(const char *logic_name)
+static struct monitor_target *get_file_target(const char *logic_name)
 {
 	char *file = rindex(logic_name, '/');
 	struct monitor_target *target = NULL;
@@ -463,6 +468,25 @@ static struct monitor_target *get_target(const char *logic_name)
 		}
 	}
 	*file = '/';
+	pthread_mutex_unlock(&m_table.mutex);
+
+	return target;
+}
+
+static struct monitor_target *get_dir_target(const char *dir)
+{
+	struct monitor_target *target = NULL;
+	struct list_head *pos;
+
+	pthread_mutex_lock(&m_table.mutex);
+	list_for_each(pos, &m_table.head) {
+		struct monitor_target *t =
+			list_entry(pos, struct monitor_target, l);
+		if (strcmp(t->logic_name, dir) == 0) {
+			target = t;
+			break;
+		}
+	}
 	pthread_mutex_unlock(&m_table.mutex);
 
 	return target;
@@ -487,7 +511,7 @@ char *get_sys_name(char *logic_name)
 		return NULL;
 	}
 
-	target = get_target(logic_name);
+	target = get_file_target(logic_name);
 
 	if (target == NULL) {
 		free(sys_name);
@@ -552,15 +576,21 @@ int file_monitor_rmdir(const char *sys_name, const char *logic_name)
 {
 	struct monitor_target *target;
 	int ret;
+	char cmd[MAX_LINE];
 
+	sprintf(cmd, "rm -r %s", sys_name);
+	_debug("!!!!!!!!!! %s\n", cmd);
+	system(cmd);
+	/*
 	ret = rmdir(sys_name);
 	if (ret < 0) {
 		_error("rmdir failed '%s'\n", logic_name);
 		perror("rmdir() failed");
 		goto out;
 	}
+	*/
 
-	target = get_target(logic_name);
+	target = get_dir_target(logic_name);
 	if (target == NULL) {
 		_error("Target not found for '%s'\n", logic_name);
 		ret = -1;
@@ -622,8 +652,6 @@ void *file_monitor_task(void *arg)
 
 	bzero(&tft, sizeof(struct trans_file_table));
 	while (1) {
-		usleep(500000);
-
 		len = read(m_table.fd, event_buf, EVENT_BUF_LEN);
 		bzero(&tft, sizeof(tft));
 		

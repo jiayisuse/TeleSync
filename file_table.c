@@ -1,11 +1,24 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <pthread.h>
 
 #include <hash.h>
 #include <debug.h>
+#include <packet_def.h>
 #include "file_table.h"
 
+
+static bool already_in_owners(struct list_head *head, struct peer_id_list *owner)
+{
+	struct list_head *pos;
+	list_for_each(pos, head) {
+		struct peer_id_list *p = list_entry(pos, struct peer_id_list, l);
+		if (p->ip == owner->ip)
+			return true;
+	}
+	return false;
+}
 
 /**
  * add all the owners in trans_file_entry *te to a linked list head
@@ -30,7 +43,8 @@ static void __peer_id_list_add(struct list_head *owner_h,
 		INIT_LIST_ELM(&p->l);
 		p->ip = te->owners[i].ip;
 		p->port = te->owners[i].port;
-		list_add_tail(owner_h, &p->l);
+		if (!already_in_owners(owner_h, p))
+			list_add_tail(owner_h, &p->l);
 	}
 }
 
@@ -338,14 +352,12 @@ int file_table_delete(struct file_table *table, struct trans_file_entry *te)
 void file_table_delete_owner(struct file_table *table, uint32_t ip)
 {
 	struct file_entry *fe;
+	struct hlist_node *htmp;
 	struct list_head *pos, *tmp;
 	int i;
 
 	pthread_mutex_lock(&table->mutex);
-	hash_for_each(table->file_htable, i, fe, hlist) {
-		if (fe == NULL)
-			continue;
-
+	hash_for_each_safe(table->file_htable, i, htmp, fe, hlist) {
 		pthread_rwlock_wrlock(&fe->rwlock);
 		list_for_each_safe(pos, tmp, &fe->owner_head) {
 			struct peer_id_list *p = list_entry(pos,
@@ -387,14 +399,13 @@ void file_table_destroy(struct file_table *table)
 void file_table_print(struct file_table *table)
 {
 	struct file_entry *fe;
+	struct hlist_node *tmp;
 	int i;
 
 	printf("\n");
 	_debug("-------- File Table -------\n");
 	pthread_mutex_lock(&table->mutex);
-	hash_for_each(table->file_htable, i, fe, hlist) {
-		if (fe == NULL)
-			continue;
+	hash_for_each_safe(table->file_htable, i, tmp, fe, hlist) {
 		_debug("%-60s %lu\n", fe->name, fe->timestamp);
 	}
 	pthread_mutex_unlock(&table->mutex);
@@ -409,6 +420,7 @@ void file_table_print(struct file_table *table)
 void trans_table_fill_from(struct trans_file_table *tft, struct file_table *ft)
 {
 	struct file_entry *fe;
+	struct hlist_node *tmp;
 	int i;
 
 	if (tft == NULL || ft == NULL)
@@ -416,9 +428,7 @@ void trans_table_fill_from(struct trans_file_table *tft, struct file_table *ft)
 
 	bzero(tft, sizeof(struct trans_file_table));
 	pthread_mutex_lock(&ft->mutex);
-	hash_for_each(ft->file_htable, i, fe, hlist) {
-		if (fe == NULL)
-			continue;
+	hash_for_each_safe(ft->file_htable, i, tmp, fe, hlist) {
 		trans_entry_fill_from(tft->entries + tft->n, fe);
 		tft->n++;
 	}

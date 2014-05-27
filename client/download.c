@@ -198,7 +198,8 @@ static void *piece_download_task(void *arg)
 	long int ret = 0, ret_len;
 	int piece_id;
 
-	_enter();
+	_enter("file = '%s', ip = '%s'\n",
+			targ->obj->logic_name, ip_string(targ->owner_ip));
 
        	conn = connect_to_peer(targ->owner_ip, targ->owner_port);
 	if (conn < 0) {

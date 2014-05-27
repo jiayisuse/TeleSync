@@ -29,7 +29,7 @@ static const struct option long_options[] = {
 static void usage(FILE *fp, char **argv)
 {
 	fprintf(fp,
-		"Usage: %s [-m client|server] [-i device name]\n\n"
+		"Usage: %s [-m client|server]\n\n"
 		"Options:\n"
 		"-m | --mode          client|server\n"
 		"-d | --open debug    print debug info\n"
