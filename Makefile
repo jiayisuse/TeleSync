@@ -5,7 +5,7 @@ client_objs = client/start.o client/file_monitor.o client/packet.o client/downlo
 utility_objs = file_table.o utility/segment.o utility/list.o utility/pthread_wait.o
 objects = dartsync.o $(server_objs) $(client_objs) $(utility_objs)
 
-CFLAGS += -Wall
+CFLAGS += -Wall -g
 LINKFLAGS += -lpthread
 INC = -I./include
 

@@ -557,6 +557,7 @@ static void broadcast_entry_handler(struct trans_file_entry *te)
 			peer_id_list_replace(fe, te);
 			if (te->timestamp > fe->timestamp) {
 				/* create a file add task to download the file */
+				file_entry_update_timestamp(fe, te->timestamp);
 				pthread_create(&new_tid, NULL,
 						ptop_download_task, fe);
 			}
@@ -589,10 +590,13 @@ static void broadcast_entry_handler(struct trans_file_entry *te)
 			pthread_create(&new_tid, NULL, ptop_download_task, fe);
 		} else {
 			peer_id_list_replace(fe, te);
-			if (te->timestamp > fe->timestamp)
+			_debug("te timestamp = %lu, fe timestamp = %lu\n", te->timestamp, fe->timestamp);
+			if (te->timestamp > fe->timestamp) {
 				/* create a file add task to download the file */
+				file_entry_update_timestamp(fe, te->timestamp);
 				pthread_create(&new_tid, NULL,
 						ptop_download_task, fe);
+			}
 		}
 		/*
 		file_table_print(&ft);

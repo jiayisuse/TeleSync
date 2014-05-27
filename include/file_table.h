@@ -37,6 +37,7 @@ bool has_same_owners(struct file_entry *fe, struct trans_file_entry *te);
 struct file_entry *file_entry_alloc();
 void file_entry_add(struct file_table *table, struct file_entry *fe);
 int file_entry_update(struct file_entry *fe, struct trans_file_entry *te);
+void file_entry_update_timestamp(struct file_entry *fe, uint64_t timestamp);
 void file_entry_fill_from(struct file_entry *fe, struct trans_file_entry *te);
 void trans_entry_fill_from(struct trans_file_entry *te, struct file_entry *fe);
 

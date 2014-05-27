@@ -174,6 +174,14 @@ int file_entry_update(struct file_entry *fe, struct trans_file_entry *te)
 	return ret;
 }
 
+inline void file_entry_update_timestamp(struct file_entry *fe,
+					uint64_t timestamp)
+{
+	pthread_rwlock_wrlock(&fe->rwlock);
+	fe->timestamp = timestamp;
+	pthread_rwlock_unlock(&fe->rwlock);
+}
+
 /**
  * delete the file entry from the file table
  * @table: the file table which the file entry would be deleted from
