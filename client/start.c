@@ -202,7 +202,7 @@ static void file_delete(struct trans_file_entry *te)
 	if (te == NULL)
 		return;
 	
-	target = file_monitor_block(te->name);
+	target = file_monitor_block(te->name, true);
 	if (target == NULL) {
 		_error("Could NOT find the target with '%s'\n", te->name);
 		return;
@@ -278,7 +278,7 @@ static void *ptop_download_task(void *arg)
 	long int ret = 0;
 
 	/* block file monitor */
-	target = file_monitor_block(logic_name);
+	target = file_monitor_block(logic_name, false);
 	if (target == NULL) {
 		_error("Could NOT find the target with '%s'\n", logic_name);
 		ret = -1;
@@ -471,6 +471,21 @@ close_out:
 }
 
 
+static void peer_id_list_remove_myself(struct file_entry *fe)
+{
+	struct list_head *pos;
+	pthread_rwlock_wrlock(&fe->rwlock);
+	list_for_each(pos, &fe->owner_head) {
+		struct peer_id_list *p = list_entry(pos, struct peer_id_list, l);
+		if (p->ip == my_ip) {
+			list_del(&p->l);
+			free(p);
+			break;
+		}
+	}
+	pthread_rwlock_unlock(&fe->rwlock);
+}
+
 static void file_table_sync(struct file_table *ft, struct trans_file_table *tft)
 {
 	struct file_entry *fe;
@@ -485,9 +500,12 @@ static void file_table_sync(struct file_table *ft, struct trans_file_table *tft)
 			pthread_create(&new_tid, NULL, ptop_download_task, fe);
 		} else {
 			peer_id_list_replace(fe, te);
-			if (te->timestamp > fe->timestamp)
+			peer_id_list_remove_myself(fe);
+			if (te->timestamp > fe->timestamp) {
+				file_entry_update_timestamp(fe, te->timestamp);
 				pthread_create(&new_tid, NULL,
 						ptop_download_task, fe);
+			}
 		}
 	}
 }
@@ -556,6 +574,7 @@ static void broadcast_entry_handler(struct trans_file_entry *te)
 		if (fe != NULL) {
 			_debug("\tOLD File\n");
 			peer_id_list_replace(fe, te);
+			peer_id_list_remove_myself(fe);
 			if (te->timestamp > fe->timestamp) {
 				/* create a file add task to download the file */
 				file_entry_update_timestamp(fe, te->timestamp);
@@ -591,7 +610,7 @@ static void broadcast_entry_handler(struct trans_file_entry *te)
 			pthread_create(&new_tid, NULL, ptop_download_task, fe);
 		} else {
 			peer_id_list_replace(fe, te);
-			_debug("te timestamp = %lu, fe timestamp = %lu\n", te->timestamp, fe->timestamp);
+			peer_id_list_remove_myself(fe);
 			if (te->timestamp > fe->timestamp) {
 				/* create a file add task to download the file */
 				file_entry_update_timestamp(fe, te->timestamp);
@@ -667,7 +686,7 @@ static void *keep_alive_task(void *arg)
 static void *ttop_receiver_task(void *arg)
 {
 	struct client_thread_arg *targ = arg;
-	int conn = targ->conn;
+	int i, conn = targ->conn;
 	struct ttop_packet pkt;
 	struct trans_file_table *tft;
 	pthread_t broadcast_handler_tid;
@@ -685,8 +704,16 @@ static void *ttop_receiver_task(void *arg)
 			memcpy(tft, pkt.data, pkt.hdr.data_len);
 
 			_debug("\tbroadcast entry number: %d\n", tft->n);
+			/*
 			pthread_create(&broadcast_handler_tid,
 					NULL, broadcast_handler_task, tft);
+					*/
+
+			for (i = 0; i < tft->n; i++)
+				broadcast_entry_handler(tft->entries + i);
+
+			free(tft);
+
 			break;
 
 		case TRACKER_SYNC:
@@ -698,6 +725,8 @@ static void *ttop_receiver_task(void *arg)
 			break;
 		}
 	}
+
+	_debug("NO oooooooooooooooo OOOOOOOOOOO\n");
 
 	pthread_exit((void *)0);
 }

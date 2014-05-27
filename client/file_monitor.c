@@ -181,7 +181,7 @@ static int handle_event(struct inotify_event *event,
 			struct trans_file_entry *te,
 			char *sys_name)
 {
-	char *target_name = m_table.targets[event->wd]->sys_name;
+	char *target_name;
 	int ret = 0;
 
 	if (tricky_string(sys_name))
@@ -189,6 +189,8 @@ static int handle_event(struct inotify_event *event,
 
 	te->file_type = event->mask & IN_ISDIR ? DIRECTORY : REGULAR;
 
+	pthread_mutex_lock(&m_table.mutex);
+	target_name = m_table.targets[event->wd]->sys_name;
 	if (event->mask & IN_CREATE) {
 		te->op_type = FILE_ADD;
 		_debug("INOTIFY: '%s' created\n", te->name);
@@ -198,7 +200,7 @@ static int handle_event(struct inotify_event *event,
 	} else if (event->mask & IN_DELETE_SELF) {
 		te->op_type = FILE_DELETE;
 		_debug("INOTIFY: Target '%s' was itself deleted\n", target_name);
-		unwatch_and_free_target(&m_table, m_table.targets[event->wd]);
+		__unwatch_and_free_target(&m_table, m_table.targets[event->wd]);
 		te->file_type = DIRECTORY;
 	} else if (event->mask & IN_MODIFY) {
 		te->op_type = FILE_MODIFY;
@@ -206,7 +208,7 @@ static int handle_event(struct inotify_event *event,
 	} else if (event->mask & IN_MOVE_SELF) {
 		te->op_type = FILE_DELETE;
 		_debug("INOTIFY: Target '%s' was itself moved", target_name);
-		unwatch_and_free_target(&m_table, m_table.targets[event->wd]);
+		__unwatch_and_free_target(&m_table, m_table.targets[event->wd]);
 		te->file_type = DIRECTORY;
 	} else if (event->mask & IN_MOVED_FROM) {
 		te->op_type = FILE_DELETE;
@@ -222,6 +224,7 @@ static int handle_event(struct inotify_event *event,
 		ret = -1;
 		_debug("INOTIFY: '%s' UN-Known\n", te->name);
 	}
+	pthread_mutex_unlock(&m_table.mutex);
 
 	if (te->op_type == FILE_ADD && te->file_type == DIRECTORY)
 		watch_target_add(&m_table, sys_name, te->name);
@@ -348,6 +351,47 @@ int get_file_table(struct file_table *ft, char **target, int n)
 	return 0;
 }
 
+static struct monitor_target *get_file_target(const char *logic_name)
+{
+	char *file = rindex(logic_name, '/');
+	struct monitor_target *target = NULL;
+	struct list_head *pos;
+
+	pthread_mutex_lock(&m_table.mutex);
+	*file = '\0';
+	list_for_each(pos, &m_table.head) {
+		struct monitor_target *t =
+			list_entry(pos, struct monitor_target, l);
+		if (strcmp(t->logic_name, logic_name) == 0) {
+			target = t;
+			break;
+		}
+	}
+	*file = '/';
+	pthread_mutex_unlock(&m_table.mutex);
+
+	return target;
+}
+
+static struct monitor_target *get_dir_target(const char *dir)
+{
+	struct monitor_target *target = NULL;
+	struct list_head *pos;
+
+	pthread_mutex_lock(&m_table.mutex);
+	list_for_each(pos, &m_table.head) {
+		struct monitor_target *t =
+			list_entry(pos, struct monitor_target, l);
+		if (strcmp(t->logic_name, dir) == 0) {
+			target = t;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&m_table.mutex);
+
+	return target;
+}
+
 static inline void __file_monitor_block(struct monitor_target *t)
 {
 	if (t == NULL)
@@ -372,7 +416,7 @@ static inline void __file_monitor_unblock(struct monitor_target *target)
  * @return: the monitor target, which should be used to call
  *          file_monitor_unblock() later
  */
-struct monitor_target *file_monitor_block(char *logic_name)
+struct monitor_target *file_monitor_block(char *logic_name, bool del)
 {
 	struct list_head *pos;
 	char *last_i = rindex(logic_name, '/');
@@ -384,19 +428,12 @@ struct monitor_target *file_monitor_block(char *logic_name)
 	if (first_i == NULL)
 		return NULL;
 
+	t = get_file_target(logic_name);
+
+	if (del)
+		goto out;
+
 	pthread_mutex_lock(&m_table.mutex);
-
-	*last_i = '\0';
-	list_for_each(pos, &m_table.head) {
-		t= list_entry(pos, struct monitor_target, l);
-		if (strcmp(t->logic_name, logic_name) == 0) {
-			*last_i = '/';
-			pthread_mutex_unlock(&m_table.mutex);
-			goto out;
-		}
-	}
-	*last_i = '/';
-
 	/* no target found, we need to create the new dir and
 	   watch it */
 	for ( ; first_i != last_i; first_i = index(first_i + 1, '/')) {
@@ -449,47 +486,6 @@ inline void file_monitor_unblock(struct monitor_target *target)
 	target->wd = inotify_add_watch(m_table.fd, target->sys_name,
 			DEFAULT_WATCH_MASK);
 	pthread_mutex_unlock(&target->mutex);
-}
-
-static struct monitor_target *get_file_target(const char *logic_name)
-{
-	char *file = rindex(logic_name, '/');
-	struct monitor_target *target = NULL;
-	struct list_head *pos;
-
-	pthread_mutex_lock(&m_table.mutex);
-	*file = '\0';
-	list_for_each(pos, &m_table.head) {
-		struct monitor_target *t =
-			list_entry(pos, struct monitor_target, l);
-		if (strcmp(t->logic_name, logic_name) == 0) {
-			target = t;
-			break;
-		}
-	}
-	*file = '/';
-	pthread_mutex_unlock(&m_table.mutex);
-
-	return target;
-}
-
-static struct monitor_target *get_dir_target(const char *dir)
-{
-	struct monitor_target *target = NULL;
-	struct list_head *pos;
-
-	pthread_mutex_lock(&m_table.mutex);
-	list_for_each(pos, &m_table.head) {
-		struct monitor_target *t =
-			list_entry(pos, struct monitor_target, l);
-		if (strcmp(t->logic_name, dir) == 0) {
-			target = t;
-			break;
-		}
-	}
-	pthread_mutex_unlock(&m_table.mutex);
-
-	return target;
 }
 
 /**
@@ -652,6 +648,7 @@ void *file_monitor_task(void *arg)
 
 	bzero(&tft, sizeof(struct trans_file_table));
 	while (1) {
+		usleep(1000);
 		len = read(m_table.fd, event_buf, EVENT_BUF_LEN);
 		bzero(&tft, sizeof(tft));
 		

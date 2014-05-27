@@ -1,6 +1,7 @@
 #ifndef FILE_MONITOR_H
 #define FILE_MONITOR_H
 
+#include <stdbool.h>
 #include <file_table.h>
 #include <list.h>
 
@@ -34,7 +35,7 @@ void *file_monitor_task(void *arg);
 
 int get_file_table(struct file_table *ft, char **target, int n);
 
-struct monitor_target *file_monitor_block(char *file_name);
+struct monitor_target *file_monitor_block(char *logic_name, bool del);
 void file_monitor_unblock(struct monitor_target *target);
 char *get_sys_name(char *logic_name);
 char *monitor_get_sys_name(char *logic_name, struct monitor_target *target);

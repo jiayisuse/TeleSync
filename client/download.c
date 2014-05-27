@@ -155,12 +155,14 @@ static inline void mark_piece_failed(struct download_obj *obj, int piece_id)
 
 int my_read(int fd, char *buf, int len)
 {
-	int n = 0, left = len;
+	int try_n = 10, n = 0, left = len;
 	int ret = 0;
 
 	while (n < len) {
 		ret = read(fd, buf + n, left);
-		if (ret <= 0)
+		if (ret < 0)
+			break;
+		else if (ret == 0 && try_n-- == 0)
 			break;
 		left -= ret;
 		n += ret;
@@ -176,7 +178,7 @@ int my_write(int fd, char *buf, int len)
 
 	while (n < len) {
 		ret = write(fd, buf + n, left);
-		if (ret <= 0)
+		if (ret < 0)
 			continue;
 		left -= ret;
 		n += ret;
