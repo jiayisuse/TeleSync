@@ -428,9 +428,11 @@ struct monitor_target *file_monitor_block(char *logic_name, bool del)
 	if (first_i == NULL)
 		return NULL;
 
+	_enter("blocking %s...", logic_name);
+
 	t = get_file_target(logic_name);
 
-	if (del)
+	if (del || t != NULL)
 		goto out;
 
 	pthread_mutex_lock(&m_table.mutex);
