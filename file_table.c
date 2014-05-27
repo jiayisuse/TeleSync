@@ -97,7 +97,6 @@ struct file_entry *file_entry_alloc()
 	INIT_LIST_HEAD(&fe->owner_head);
 	INIT_HLIST_NODE(&fe->hlist);
 	pthread_rwlock_init(&fe->rwlock, NULL);
-	fe->status = FILE_AVAILABLE;
 
 	return fe;
 }
