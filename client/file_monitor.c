@@ -450,6 +450,11 @@ struct monitor_target *file_monitor_block(char *logic_name, bool del)
 		}
 		*first_i = '/';
 	}
+
+	if (t == NULL) {
+		pthread_mutex_unlock(&m_table.mutex);
+		goto leave_return;
+	}
 	
 	for (p = logic_name + strlen(t->logic_name) + 1, first_i = index(p, '/');
 			first_i != NULL;
@@ -470,6 +475,7 @@ struct monitor_target *file_monitor_block(char *logic_name, bool del)
 out:
 	pthread_mutex_lock(&t->mutex);
 	__file_monitor_block(t);
+leave_return:
 	_leave();
 	return t;
 }
