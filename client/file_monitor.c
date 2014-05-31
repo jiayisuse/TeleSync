@@ -525,7 +525,6 @@ char *get_sys_name(char *logic_name)
 
 	sprintf(sys_name, "%s%s", target->sys_name, file);
 out:
-	pthread_mutex_unlock(&m_table.mutex);
 	return sys_name;
 }
 

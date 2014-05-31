@@ -293,8 +293,8 @@ close_download_conn:
 close_conn:
 	close(conn);
 out:
-	free(targ);
 	_leave("onwer #%u", ip_string(targ->owner_ip));
+	free(targ);
 	pthread_exit((void *)ret);
 }
 
